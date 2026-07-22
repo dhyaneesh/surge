@@ -67,7 +67,7 @@ capabilities:
   test:keda-scaler: {availability: baseline, reason: no tests are configured}
   test:action-controller: {availability: baseline, reason: no tests are configured}
   test:requirements: {availability: active}
-  test:env: {availability: baseline, reason: no tests are configured}
+  test:env: {availability: active}
   test:matrix: {availability: baseline, reason: no tests are configured}
   requirements:render: {availability: active}
   requirements:check: {availability: active}

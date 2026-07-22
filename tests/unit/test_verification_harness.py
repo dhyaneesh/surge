@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -158,7 +159,6 @@ def test_manifest_targets_declare_dependencies_and_capabilities() -> None:
 
     baseline_targets = {
         "test:action-controller",
-        "test:env",
         "test:integration",
         "test:keda-scaler",
         "test:matrix",
@@ -285,6 +285,39 @@ def run_environment(*arguments: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def run_task_environment_commands(
+    root: Path, environment: str
+) -> subprocess.CompletedProcess[str]:
+    taskfile = load_yaml(ROOT / "Taskfile.yml")
+    variables = {
+        name: value.replace("{{.ROOT_DIR}}", str(root))
+        for name, value in taskfile["vars"].items()
+    }
+    commands = taskfile["tasks"]["test:env"]["cmds"]
+    result: subprocess.CompletedProcess[str] | None = None
+    for command in commands:
+        expanded = command.replace("{{.ENV}}", environment)
+        for name, value in variables.items():
+            expanded = expanded.replace(f"{{{{.{name}}}}}", value)
+        result = subprocess.run(
+            expanded,
+            cwd=root,
+            env={
+                **os.environ,
+                "PYTHONPATH": str(ROOT),
+                "VERIFICATION_REPO_ROOT": str(root),
+            },
+            shell=True,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode:
+            break
+    assert result is not None
+    return result
+
+
 def test_environment_guard_accepts_only_registered_environment_ids() -> None:
     registered = load_yaml(MANIFEST_PATH)["registered_environments"]
 
@@ -310,6 +343,36 @@ def test_environment_guard_rejects_missing_unknown_and_extra_arguments() -> None
         assert result.returncode == 64
         assert result.stdout == ""
         assert result.stderr.startswith("[usage] test:env:")
+
+
+def test_task_environment_wiring_validates_ids_before_reporting_baseline(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "tools").mkdir()
+    shutil.copy2(ROOT / "scripts/verification-preflight.sh", tmp_path / "scripts")
+    shutil.copy2(ROOT / "scripts/test-environment.sh", tmp_path / "scripts")
+    shutil.copy2(MANIFEST_PATH, tmp_path / "tools")
+    write_executable(
+        tmp_path / ".tools/bin/uv",
+        """if [ "${1:-}" = --version ]; then echo 'uv 0.11.31'; exit 0; fi
+shift
+[ "${1:-}" = --locked ] && shift
+[ "${1:-}" = --no-sync ] && shift
+[ "${1:-}" = python ] && shift
+exec python3 "$@"
+""",
+    )
+
+    unknown = run_task_environment_commands(tmp_path, "unknown")
+    supported = run_task_environment_commands(tmp_path, "otel-demo")
+
+    assert unknown.returncode == 64
+    assert unknown.stderr == "[usage] test:env: unknown environment ID: unknown\n"
+    assert supported.returncode == 3
+    assert supported.stderr == (
+        "[baseline] test:env: no tests are configured (otel-demo)\n"
+    )
 
 
 def test_matrix_classifier_short_circuit_does_not_run_environment_script(
