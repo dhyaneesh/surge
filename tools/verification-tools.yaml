@@ -9,6 +9,13 @@ host_prerequisites:
   - curl
   - tar
 
+registered_environments:
+  - otel-demo
+  - aws-retail
+  - online-boutique
+  - argo-rollouts
+  - keda-rabbitmq
+
 sha256_utilities:
   required: 1
   any_of:

@@ -113,6 +113,13 @@ def test_manifest_pins_supported_platform_and_bootstrap_tools() -> None:
     manifest = load_yaml(MANIFEST_PATH)
     assert manifest["platform"] == {"os": "linux", "architecture": "amd64"}
     assert manifest["host_prerequisites"] == ["bash", "curl", "tar"]
+    assert manifest["registered_environments"] == [
+        "otel-demo",
+        "aws-retail",
+        "online-boutique",
+        "argo-rollouts",
+        "keda-rabbitmq",
+    ]
     assert manifest["sha256_utilities"] == {
         "required": 1,
         "any_of": [
@@ -278,13 +285,7 @@ def run_environment(*arguments: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_environment_guard_accepts_only_registered_environment_ids() -> None:
-    registered = (
-        "otel-demo",
-        "aws-retail",
-        "online-boutique",
-        "argo-rollouts",
-        "keda-rabbitmq",
-    )
+    registered = load_yaml(MANIFEST_PATH)["registered_environments"]
 
     for environment in registered:
         result = run_environment(environment)
@@ -293,6 +294,13 @@ def test_environment_guard_accepts_only_registered_environment_ids() -> None:
         assert result.stderr == (
             f"[baseline] test:env: no tests are configured ({environment})\n"
         )
+
+    script = (ROOT / "scripts/test-environment.sh").read_text(encoding="utf-8")
+    case_allowlist = re.search(r'case "\$1" in\n\s+([^\n]+)\)', script)
+    assert case_allowlist is not None
+    assert {item.strip() for item in case_allowlist.group(1).split("|")} == set(
+        registered
+    )
 
 
 def test_environment_guard_rejects_missing_unknown_and_extra_arguments() -> None:
@@ -303,7 +311,7 @@ def test_environment_guard_rejects_missing_unknown_and_extra_arguments() -> None
         assert result.stderr.startswith("[usage] test:env:")
 
 
-def test_matrix_baseline_preflight_does_not_run_environment_script(
+def test_matrix_classifier_short_circuit_does_not_run_environment_script(
     tmp_path: Path,
 ) -> None:
     tools = tmp_path / "tools"
@@ -356,6 +364,17 @@ targets:
     assert "[baseline] test:matrix: no tests are configured" in result.stderr
     assert "[baseline] test:env: no tests are configured" in result.stderr
     assert not sentinel.exists()
+
+
+def test_taskfile_matrix_runs_aggregate_preflight_before_environment_children() -> None:
+    commands = load_yaml(ROOT / "Taskfile.yml")["tasks"]["test:matrix"]["cmds"]
+
+    assert isinstance(commands[0], str)
+    assert "verification-preflight.sh aggregate test:matrix" in commands[0]
+    assert all(
+        isinstance(command, dict) and command.get("task") == "test:env"
+        for command in commands[1:]
+    )
 
 
 def test_preflight_classifies_missing_local_uv_as_prerequisite(tmp_path: Path) -> None:
