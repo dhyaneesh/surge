@@ -1,19 +1,21 @@
 apiVersion: tests.guardian.io/v1alpha2
 kind: GuardianScenario
 metadata:
-  name: legitimate-demand-scale-up
+  name: resource-saturation
 spec:
-  description: Sustained legitimate demand permits one scale-up.
+  description: Local resource pressure permits scale-up without rollback.
   candidateEnvironments:
   - otel-demo
+  - aws-retail
   - online-boutique
+  - argo-rollouts
   - keda-rabbitmq
   environmentRequirements:
     capabilities:
     - healthy-baseline
-    - load-generation
-    - horizontal-scaling
+    - resource-pressure
     - dependency-observation
+    - horizontal-scaling
     - workflow-observation
     - mutation-observation
     - recovery-observation
@@ -26,21 +28,16 @@ spec:
   baseline:
     healthyFor: 5m
   stimulus:
-    load:
-      pattern: sustained
-      multiplier: 4
-      duration: 10m
+    fault:
+      type: high_cpu
+      magnitude: 1
   expected:
     incident:
-      incidentClass: load_spike
+      incidentClass: resource_saturation
       actionable: true
       telemetryQuality: healthy
     evidence:
       supporting:
-      - evidenceType: load
-        subjectRole: request-processor
-        freshness: fresh
-        tenantRelation: same-tenant
       - evidenceType: resource-utilization
         subjectRole: request-processor
         freshness: fresh
@@ -92,13 +89,13 @@ spec:
     safetyGates:
     - post-action-evidence-for-recovery
     recovery:
-      contractRef: legitimate-demand-scale-up-recovery
+      contractRef: resource-saturation-recovery
       contractVersion: 1
       registryVersion: critical-pack-v1
       requireFreshTelemetry: true
       evidence:
       - *id002
       conditions:
-      - capacity-converged
+      - resource-pressure-cleared
       - service-healthy
       minimumPostActionWindows: 1

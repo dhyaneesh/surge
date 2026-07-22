@@ -46,9 +46,10 @@ class RepositoryGovernanceTests(unittest.TestCase):
         content = (ROOT / "Taskfile.yml").read_text(encoding="utf-8")
         self.assertIn("test:architecture:", content)
         self.assertIn(
-            "uv run python -m unittest tests.architecture.test_boundaries -v",
+            "python -m tools.verification_harness suite test:architecture tests/architecture",
             content,
         )
+        self.assertIn("run --locked pytest tests/architecture", content)
 
 
 if __name__ == "__main__":

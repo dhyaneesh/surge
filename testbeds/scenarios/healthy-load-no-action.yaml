@@ -1,0 +1,77 @@
+apiVersion: tests.guardian.io/v1alpha2
+kind: GuardianScenario
+metadata:
+  name: healthy-load-no-action
+spec:
+  description: Healthy elevated load remains observation-only.
+  candidateEnvironments:
+  - otel-demo
+  - aws-retail
+  - online-boutique
+  - argo-rollouts
+  - keda-rabbitmq
+  environmentRequirements:
+    capabilities:
+    - healthy-baseline
+    - load-generation
+    - workflow-observation
+    - mutation-observation
+  traceability:
+    normativeRequirements: []
+    acceptanceTests: []
+  target:
+    serviceSelector:
+      role: request-processor
+  baseline:
+    healthyFor: 5m
+  stimulus:
+    load:
+      pattern: step
+      multiplier: 2
+      duration: 10m
+  expected:
+    incident:
+      incidentClass: null
+      actionable: false
+      telemetryQuality: healthy
+    evidence:
+      supporting:
+      - evidenceType: metrics
+        subjectRole: request-processor
+        freshness: fresh
+        tenantRelation: same-tenant
+      contradicting: []
+      requiredFresh: []
+    actions:
+      eligible: []
+      forbidden:
+      - actionType: scale
+        scaleDirection: any
+      - actionType: rollback
+      proposed: null
+    policy:
+      decision: denied
+      failClosed: true
+    workflow:
+      requiredStates:
+      - active
+      - assessment
+      - closed
+      parentCount:
+        exact: 1
+      proposalCount:
+        atMost: 1
+      approvalCount:
+        exact: 0
+      terminalReason: null
+    mutations:
+      count:
+        exact: 0
+      actions: []
+    audit:
+      events:
+      - eventType: observation-recorded
+        count:
+          atLeast: 1
+    safetyGates: []
+    recovery: null

@@ -26,6 +26,12 @@ MANDATORY_TARGETS = {
     "test:contract",
     "test:integration",
     "test:architecture",
+    "mcp:signoz:check",
+    "mcp:signoz:smoke",
+    "diagnostics:signoz",
+    "test:scenario-schema",
+    "test:scenario-compatibility",
+    "test:scenarios",
     "test:testbeds-unit",
     "test:testbeds-contract",
     "test:policy",
@@ -167,6 +173,8 @@ def test_manifest_targets_declare_dependencies_and_capabilities() -> None:
         "test:replay",
         "test:replay-deterministic",
         "test:security",
+        "mcp:signoz:smoke",
+        "diagnostics:signoz",
     }
     assert {
         name
@@ -186,6 +194,40 @@ def test_manifest_targets_declare_dependencies_and_capabilities() -> None:
 def test_tools_directory_is_ignored() -> None:
     patterns = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert ".tools/" in patterns
+
+
+def test_task_commands_use_a_linux_native_temporary_directory() -> None:
+    taskfile = load_yaml(ROOT / "Taskfile.yml")
+
+    assert taskfile["env"]["TMPDIR"] == "/tmp"
+
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "TEMP": "/mnt/c/Users/example/AppData/Local/Temp",
+            "TMP": "/mnt/c/Users/example/AppData/Local/Temp",
+            "TMPDIR": taskfile["env"]["TMPDIR"],
+        }
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import tempfile; "
+                "f = tempfile.TemporaryFile(buffering=0); "
+                "f.write(b'x'); f.seek(0); f.truncate(); f.close(); "
+                "print(tempfile.gettempdir())"
+            ),
+        ],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "/tmp\n"
 
 
 def test_readme_documents_the_fresh_checkout_verification_contract() -> None:

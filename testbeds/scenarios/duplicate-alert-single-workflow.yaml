@@ -1,0 +1,77 @@
+apiVersion: tests.guardian.io/v1alpha2
+kind: GuardianScenario
+metadata:
+  name: duplicate-alert-single-workflow
+spec:
+  description: Duplicate incident deliveries converge on one tenant-scoped parent.
+  candidateEnvironments:
+  - otel-demo
+  - aws-retail
+  - online-boutique
+  - argo-rollouts
+  - keda-rabbitmq
+  environmentRequirements:
+    capabilities:
+    - incident-ingress-control
+    - workflow-observation
+    - mutation-observation
+  traceability:
+    normativeRequirements:
+    - GRD-WF-001
+    acceptanceTests:
+    - AT-WF-001
+  target:
+    serviceSelector:
+      role: request-processor
+  baseline:
+    healthyFor: 5m
+  stimulus:
+    incidentDelivery:
+      count: 3
+      mode: duplicate
+  expected:
+    incident:
+      incidentClass: null
+      actionable: false
+      telemetryQuality: healthy
+    evidence:
+      supporting: []
+      contradicting: []
+      requiredFresh: []
+    actions:
+      eligible: []
+      forbidden: []
+      proposed: null
+    policy:
+      decision: denied
+      failClosed: true
+    workflow:
+      requiredStates:
+      - active
+      - assessment
+      - closed
+      parentCount:
+        exact: 1
+      proposalCount:
+        atMost: 1
+      approvalCount:
+        exact: 0
+      terminalReason: null
+    mutations:
+      count:
+        exact: 0
+      actions: []
+    audit:
+      events:
+      - eventType: duplicate-event-received
+        count:
+          atLeast: 2
+    safetyGates: []
+    recovery: null
+    tenantIsolation:
+      rejectForeignEvidenceBeforeScoring: false
+      rejectMismatchBeforeExternalIo: false
+      tenantScopedWorkflowIdentity: true
+      tenantScopedDeduplication: true
+      tenantScopedCacheAndTopology: true
+      tenantScopedApproval: true

@@ -57,6 +57,12 @@ capabilities:
   test:contract: {availability: active}
   test:integration: {availability: baseline, reason: no tests are configured}
   test:architecture: {availability: active}
+  mcp:signoz:check: {availability: active}
+  mcp:signoz:smoke: {availability: baseline, reason: no tests are configured}
+  diagnostics:signoz: {availability: baseline, reason: no tests are configured}
+  test:scenario-schema: {availability: active}
+  test:scenario-compatibility: {availability: active}
+  test:scenarios: {availability: active}
   test:testbeds-unit: {availability: active}
   test:testbeds-contract: {availability: active}
   test:policy: {availability: baseline, reason: no tests are configured}
@@ -86,6 +92,21 @@ targets:
   test:contract: {dependencies: [task, uv, pytest], capabilities: [test:contract]}
   test:integration: {dependencies: [], capabilities: [test:integration]}
   test:architecture: {dependencies: [task, uv, pytest], capabilities: [test:architecture]}
+  mcp:signoz:check:
+    dependencies: [task, uv, pytest]
+    capabilities: [mcp:signoz:check]
+    children: [test:architecture]
+  mcp:signoz:smoke:
+    dependencies: []
+    capabilities: [mcp:signoz:smoke]
+    children: [test:integration]
+  diagnostics:signoz:
+    dependencies: []
+    capabilities: [diagnostics:signoz]
+    children: [test:integration]
+  test:scenario-schema: {dependencies: [task, uv, pytest], capabilities: [test:scenario-schema]}
+  test:scenario-compatibility: {dependencies: [task, uv, pytest], capabilities: [test:scenario-compatibility]}
+  test:scenarios: {dependencies: [task, uv, pytest], capabilities: [test:scenarios]}
   test:testbeds-unit: {dependencies: [task, uv, pytest], capabilities: [test:testbeds-unit]}
   test:testbeds-contract: {dependencies: [task, uv, pytest], capabilities: [test:testbeds-contract]}
   test:policy: {dependencies: [], capabilities: [test:policy]}

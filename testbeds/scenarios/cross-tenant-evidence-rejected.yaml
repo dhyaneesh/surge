@@ -1,0 +1,87 @@
+apiVersion: tests.guardian.io/v1alpha2
+kind: GuardianScenario
+metadata:
+  name: cross-tenant-evidence-rejected
+spec:
+  description: Foreign tenant evidence is rejected before scoring and I/O.
+  candidateEnvironments:
+  - otel-demo
+  - aws-retail
+  - online-boutique
+  - argo-rollouts
+  - keda-rabbitmq
+  environmentRequirements:
+    capabilities:
+    - multi-tenant-fixture
+    - workflow-observation
+    - mutation-observation
+  traceability:
+    normativeRequirements:
+    - GRD-TEN-001
+    - GRD-TEN-006
+    acceptanceTests:
+    - AT-TEN-001
+  target:
+    serviceSelector:
+      role: request-processor
+  baseline:
+    healthyFor: 5m
+  stimulus:
+    tenantInjection:
+      evidenceTenantRelation: foreign-tenant
+  expected:
+    incident:
+      incidentClass: null
+      actionable: false
+      telemetryQuality: healthy
+    evidence:
+      supporting:
+      - evidenceType: metrics
+        subjectRole: request-processor
+        freshness: fresh
+        tenantRelation: same-tenant
+      contradicting:
+      - evidenceType: metrics
+        subjectRole: request-processor
+        freshness: fresh
+        tenantRelation: foreign-tenant
+      requiredFresh: []
+    actions:
+      eligible: []
+      forbidden: []
+      proposed: null
+    policy:
+      decision: denied
+      failClosed: true
+    workflow:
+      requiredStates:
+      - active
+      - assessment
+      - closed
+      parentCount:
+        exact: 1
+      proposalCount:
+        atMost: 1
+      approvalCount:
+        exact: 0
+      terminalReason: tenant-mismatch
+    mutations:
+      count:
+        exact: 0
+      actions: []
+    audit:
+      events:
+      - eventType: tenant-reference-rejected
+        count:
+          atLeast: 1
+    safetyGates:
+    - tenant-before-scoring
+    - tenant-before-external-io
+    recovery: null
+    tenantIsolation:
+      rejectForeignEvidenceBeforeScoring: true
+      rejectMismatchBeforeExternalIo: true
+      tenantScopedWorkflowIdentity: true
+      tenantScopedDeduplication: true
+      tenantScopedCacheAndTopology: true
+      tenantScopedApproval: true

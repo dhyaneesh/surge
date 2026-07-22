@@ -187,9 +187,10 @@ def test_load_scenario_returns_guardian_scenario(tmp_path: Path) -> None:
 def test_canonical_example_file_is_valid() -> None:
     path = (
         Path(__file__).parents[2]
-        / "testbeds"
+        / "tests"
+        / "fixtures"
         / "scenarios"
-        / "legitimate-demand-scale-up.yaml"
+        / "legitimate-demand-scale-up-v1alpha1.yaml"
     )
 
     scenario = load_scenario(path)

@@ -1,0 +1,82 @@
+apiVersion: tests.guardian.io/v1alpha2
+kind: GuardianScenario
+metadata:
+  name: dependency-failure-do-not-scale-caller
+spec:
+  description: A failing dependency does not authorize caller scaling.
+  candidateEnvironments:
+  - otel-demo
+  - aws-retail
+  - online-boutique
+  environmentRequirements:
+    capabilities:
+    - healthy-baseline
+    - fault-injection
+    - dependency-observation
+    - workflow-observation
+    - mutation-observation
+  traceability:
+    normativeRequirements: []
+    acceptanceTests: []
+  target:
+    serviceSelector:
+      role: request-processor
+  baseline:
+    healthyFor: 5m
+  stimulus:
+    fault:
+      type: dependency_unavailable
+      magnitude: 1
+  expected:
+    incident:
+      incidentClass: dependency_failure
+      actionable: false
+      telemetryQuality: healthy
+    evidence:
+      supporting:
+      - evidenceType: dependency-health
+        subjectRole: dependency
+        freshness: fresh
+        tenantRelation: same-tenant
+      - evidenceType: topology
+        subjectRole: request-processor
+        freshness: fresh
+        tenantRelation: same-tenant
+      contradicting:
+      - evidenceType: resource-utilization
+        subjectRole: request-processor
+        freshness: fresh
+        tenantRelation: same-tenant
+      requiredFresh: []
+    actions:
+      eligible: []
+      forbidden:
+      - actionType: scale
+        scaleDirection: any
+      proposed: null
+    policy:
+      decision: denied
+      failClosed: true
+    workflow:
+      requiredStates:
+      - active
+      - assessment
+      - closed
+      parentCount:
+        exact: 1
+      proposalCount:
+        atMost: 1
+      approvalCount:
+        exact: 0
+      terminalReason: null
+    mutations:
+      count:
+        exact: 0
+      actions: []
+    audit:
+      events:
+      - eventType: action-rejected
+        count:
+          atLeast: 1
+    safetyGates: []
+    recovery: null

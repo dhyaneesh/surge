@@ -1,0 +1,1510 @@
+scenarios:
+  cross-tenant-evidence-rejected:
+    environments:
+      argo-rollouts:
+        status: unsupported
+        missingCapabilities:
+        - multi-tenant-fixture
+        requiredAdapterOperations:
+        - emit-incident
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - tenant-rejection
+        - workflow-state
+        missingAdapterOperations:
+        - emit-incident
+        missingObservations:
+        - tenant-rejection
+        blockingReasons: []
+      aws-retail:
+        status: unsupported
+        missingCapabilities:
+        - multi-tenant-fixture
+        requiredAdapterOperations:
+        - emit-incident
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - tenant-rejection
+        - workflow-state
+        missingAdapterOperations:
+        - emit-incident
+        missingObservations:
+        - tenant-rejection
+        blockingReasons: []
+      keda-rabbitmq:
+        status: unsupported
+        missingCapabilities:
+        - multi-tenant-fixture
+        - workflow-observation
+        requiredAdapterOperations:
+        - emit-incident
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - tenant-rejection
+        - workflow-state
+        missingAdapterOperations:
+        - emit-incident
+        missingObservations:
+        - tenant-rejection
+        - workflow-state
+        blockingReasons: []
+      online-boutique:
+        status: unsupported
+        missingCapabilities:
+        - multi-tenant-fixture
+        requiredAdapterOperations:
+        - emit-incident
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - tenant-rejection
+        - workflow-state
+        missingAdapterOperations:
+        - emit-incident
+        missingObservations:
+        - tenant-rejection
+        blockingReasons: []
+      otel-demo:
+        status: unsupported
+        missingCapabilities:
+        - multi-tenant-fixture
+        requiredAdapterOperations:
+        - emit-incident
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - tenant-rejection
+        - workflow-state
+        missingAdapterOperations:
+        - emit-incident
+        missingObservations:
+        - tenant-rejection
+        blockingReasons: []
+  dependency-failure-do-not-scale-caller:
+    environments:
+      argo-rollouts:
+        status: unsupported
+        missingCapabilities:
+        - dependency-observation
+        - fault-injection
+        requiredAdapterOperations:
+        - inject-fault
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - dependency-topology
+        - mutation-count
+        - workflow-state
+        - workload-state
+        missingAdapterOperations:
+        - inject-fault
+        missingObservations:
+        - dependency-topology
+        - workload-state
+        blockingReasons: []
+      aws-retail:
+        status: supported
+        missingCapabilities: []
+        requiredAdapterOperations:
+        - inject-fault
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - dependency-topology
+        - mutation-count
+        - workflow-state
+        - workload-state
+        missingAdapterOperations: []
+        missingObservations: []
+        blockingReasons: []
+      keda-rabbitmq:
+        status: unsupported
+        missingCapabilities:
+        - dependency-observation
+        - fault-injection
+        - workflow-observation
+        requiredAdapterOperations:
+        - inject-fault
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - dependency-topology
+        - mutation-count
+        - workflow-state
+        - workload-state
+        missingAdapterOperations:
+        - inject-fault
+        missingObservations:
+        - dependency-topology
+        - workflow-state
+        blockingReasons: []
+      online-boutique:
+        status: supported
+        missingCapabilities: []
+        requiredAdapterOperations:
+        - inject-fault
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - dependency-topology
+        - mutation-count
+        - workflow-state
+        - workload-state
+        missingAdapterOperations: []
+        missingObservations: []
+        blockingReasons: []
+      otel-demo:
+        status: supported
+        missingCapabilities: []
+        requiredAdapterOperations:
+        - inject-fault
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - dependency-topology
+        - mutation-count
+        - workflow-state
+        - workload-state
+        missingAdapterOperations: []
+        missingObservations: []
+        blockingReasons: []
+  deployment-error-regression:
+    environments:
+      argo-rollouts:
+        status: supported
+        missingCapabilities: []
+        requiredAdapterOperations:
+        - deploy-version
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - deployment-version
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        missingAdapterOperations: []
+        missingObservations: []
+        blockingReasons: []
+      aws-retail:
+        status: unsupported
+        missingCapabilities:
+        - deployment-transition
+        - progressive-delivery
+        - recovery-observation
+        requiredAdapterOperations:
+        - deploy-version
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - deployment-version
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        missingAdapterOperations:
+        - deploy-version
+        missingObservations:
+        - deployment-version
+        - recovery-evidence
+        blockingReasons: []
+      keda-rabbitmq:
+        status: unsupported
+        missingCapabilities:
+        - deployment-transition
+        - progressive-delivery
+        - recovery-observation
+        - workflow-observation
+        requiredAdapterOperations:
+        - deploy-version
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - deployment-version
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        missingAdapterOperations:
+        - deploy-version
+        missingObservations:
+        - deployment-version
+        - recovery-evidence
+        - workflow-state
+        blockingReasons: []
+      online-boutique:
+        status: unsupported
+        missingCapabilities:
+        - deployment-transition
+        - progressive-delivery
+        - recovery-observation
+        requiredAdapterOperations:
+        - deploy-version
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - deployment-version
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        missingAdapterOperations:
+        - deploy-version
+        missingObservations:
+        - deployment-version
+        - recovery-evidence
+        blockingReasons: []
+      otel-demo:
+        status: unsupported
+        missingCapabilities:
+        - deployment-transition
+        - progressive-delivery
+        - recovery-observation
+        requiredAdapterOperations:
+        - deploy-version
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - deployment-version
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        missingAdapterOperations:
+        - deploy-version
+        missingObservations:
+        - deployment-version
+        - recovery-evidence
+        blockingReasons: []
+  deployment-latency-regression:
+    environments:
+      argo-rollouts:
+        status: unsupported
+        missingCapabilities:
+        - dependency-observation
+        requiredAdapterOperations:
+        - deploy-version
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - dependency-topology
+        - deployment-version
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        missingAdapterOperations: []
+        missingObservations:
+        - dependency-topology
+        blockingReasons: []
+      aws-retail:
+        status: unsupported
+        missingCapabilities:
+        - deployment-transition
+        - progressive-delivery
+        - recovery-observation
+        requiredAdapterOperations:
+        - deploy-version
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - dependency-topology
+        - deployment-version
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        missingAdapterOperations:
+        - deploy-version
+        missingObservations:
+        - deployment-version
+        - recovery-evidence
+        blockingReasons: []
+      keda-rabbitmq:
+        status: unsupported
+        missingCapabilities:
+        - dependency-observation
+        - deployment-transition
+        - progressive-delivery
+        - recovery-observation
+        - workflow-observation
+        requiredAdapterOperations:
+        - deploy-version
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - dependency-topology
+        - deployment-version
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        missingAdapterOperations:
+        - deploy-version
+        missingObservations:
+        - dependency-topology
+        - deployment-version
+        - recovery-evidence
+        - workflow-state
+        blockingReasons: []
+      online-boutique:
+        status: unsupported
+        missingCapabilities:
+        - deployment-transition
+        - progressive-delivery
+        - recovery-observation
+        requiredAdapterOperations:
+        - deploy-version
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - dependency-topology
+        - deployment-version
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        missingAdapterOperations:
+        - deploy-version
+        missingObservations:
+        - deployment-version
+        - recovery-evidence
+        blockingReasons: []
+      otel-demo:
+        status: unsupported
+        missingCapabilities:
+        - deployment-transition
+        - progressive-delivery
+        - recovery-observation
+        requiredAdapterOperations:
+        - deploy-version
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - dependency-topology
+        - deployment-version
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        missingAdapterOperations:
+        - deploy-version
+        missingObservations:
+        - deployment-version
+        - recovery-evidence
+        blockingReasons: []
+  duplicate-alert-single-workflow:
+    environments:
+      argo-rollouts:
+        status: unsupported
+        missingCapabilities:
+        - incident-ingress-control
+        requiredAdapterOperations:
+        - emit-incident
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - workflow-state
+        missingAdapterOperations:
+        - emit-incident
+        missingObservations: []
+        blockingReasons: []
+      aws-retail:
+        status: unsupported
+        missingCapabilities:
+        - incident-ingress-control
+        requiredAdapterOperations:
+        - emit-incident
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - workflow-state
+        missingAdapterOperations:
+        - emit-incident
+        missingObservations: []
+        blockingReasons: []
+      keda-rabbitmq:
+        status: unsupported
+        missingCapabilities:
+        - incident-ingress-control
+        - workflow-observation
+        requiredAdapterOperations:
+        - emit-incident
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - workflow-state
+        missingAdapterOperations:
+        - emit-incident
+        missingObservations:
+        - workflow-state
+        blockingReasons: []
+      online-boutique:
+        status: unsupported
+        missingCapabilities:
+        - incident-ingress-control
+        requiredAdapterOperations:
+        - emit-incident
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - workflow-state
+        missingAdapterOperations:
+        - emit-incident
+        missingObservations: []
+        blockingReasons: []
+      otel-demo:
+        status: unsupported
+        missingCapabilities:
+        - incident-ingress-control
+        requiredAdapterOperations:
+        - emit-incident
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - workflow-state
+        missingAdapterOperations:
+        - emit-incident
+        missingObservations: []
+        blockingReasons: []
+  expired-approval-no-mutation:
+    environments:
+      argo-rollouts:
+        status: unsupported
+        missingCapabilities:
+        - approval-control
+        requiredAdapterOperations:
+        - control-approval
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - workflow-state
+        missingAdapterOperations:
+        - control-approval
+        missingObservations: []
+        blockingReasons: []
+      aws-retail:
+        status: unsupported
+        missingCapabilities:
+        - approval-control
+        requiredAdapterOperations:
+        - control-approval
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - workflow-state
+        missingAdapterOperations:
+        - control-approval
+        missingObservations: []
+        blockingReasons: []
+      keda-rabbitmq:
+        status: unsupported
+        missingCapabilities:
+        - approval-control
+        - workflow-observation
+        requiredAdapterOperations:
+        - control-approval
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - workflow-state
+        missingAdapterOperations:
+        - control-approval
+        missingObservations:
+        - workflow-state
+        blockingReasons: []
+      online-boutique:
+        status: unsupported
+        missingCapabilities:
+        - approval-control
+        requiredAdapterOperations:
+        - control-approval
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - workflow-state
+        missingAdapterOperations:
+        - control-approval
+        missingObservations: []
+        blockingReasons: []
+      otel-demo:
+        status: unsupported
+        missingCapabilities:
+        - approval-control
+        requiredAdapterOperations:
+        - control-approval
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - workflow-state
+        missingAdapterOperations:
+        - control-approval
+        missingObservations: []
+        blockingReasons: []
+  healthy-load-no-action:
+    environments:
+      argo-rollouts:
+        status: unsupported
+        missingCapabilities:
+        - load-generation
+        requiredAdapterOperations:
+        - apply-load
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - mutation-count
+        - workflow-state
+        - workload-state
+        missingAdapterOperations:
+        - apply-load
+        missingObservations:
+        - workload-state
+        blockingReasons: []
+      aws-retail:
+        status: supported
+        missingCapabilities: []
+        requiredAdapterOperations:
+        - apply-load
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - mutation-count
+        - workflow-state
+        - workload-state
+        missingAdapterOperations: []
+        missingObservations: []
+        blockingReasons: []
+      keda-rabbitmq:
+        status: unsupported
+        missingCapabilities:
+        - workflow-observation
+        requiredAdapterOperations:
+        - apply-load
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - mutation-count
+        - workflow-state
+        - workload-state
+        missingAdapterOperations: []
+        missingObservations:
+        - workflow-state
+        blockingReasons: []
+      online-boutique:
+        status: supported
+        missingCapabilities: []
+        requiredAdapterOperations:
+        - apply-load
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - mutation-count
+        - workflow-state
+        - workload-state
+        missingAdapterOperations: []
+        missingObservations: []
+        blockingReasons: []
+      otel-demo:
+        status: supported
+        missingCapabilities: []
+        requiredAdapterOperations:
+        - apply-load
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - mutation-count
+        - workflow-state
+        - workload-state
+        missingAdapterOperations: []
+        missingObservations: []
+        blockingReasons: []
+  healthy-telemetry-unknown-cause:
+    environments:
+      argo-rollouts:
+        status: unsupported
+        missingCapabilities:
+        - ambiguous-symptom
+        requiredAdapterOperations:
+        - inject-fault
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - mutation-count
+        - telemetry-quality
+        - workflow-state
+        missingAdapterOperations:
+        - inject-fault
+        missingObservations:
+        - telemetry-quality
+        blockingReasons: []
+      aws-retail:
+        status: unsupported
+        missingCapabilities:
+        - ambiguous-symptom
+        requiredAdapterOperations:
+        - inject-fault
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - mutation-count
+        - telemetry-quality
+        - workflow-state
+        missingAdapterOperations: []
+        missingObservations:
+        - telemetry-quality
+        blockingReasons: []
+      keda-rabbitmq:
+        status: unsupported
+        missingCapabilities:
+        - ambiguous-symptom
+        - workflow-observation
+        requiredAdapterOperations:
+        - inject-fault
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - mutation-count
+        - telemetry-quality
+        - workflow-state
+        missingAdapterOperations:
+        - inject-fault
+        missingObservations:
+        - telemetry-quality
+        - workflow-state
+        blockingReasons: []
+      online-boutique:
+        status: unsupported
+        missingCapabilities:
+        - ambiguous-symptom
+        requiredAdapterOperations:
+        - inject-fault
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - mutation-count
+        - telemetry-quality
+        - workflow-state
+        missingAdapterOperations: []
+        missingObservations:
+        - telemetry-quality
+        blockingReasons: []
+      otel-demo:
+        status: unsupported
+        missingCapabilities:
+        - ambiguous-symptom
+        requiredAdapterOperations:
+        - inject-fault
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - mutation-count
+        - telemetry-quality
+        - workflow-state
+        missingAdapterOperations: []
+        missingObservations:
+        - telemetry-quality
+        blockingReasons: []
+  legitimate-demand-scale-up:
+    environments:
+      argo-rollouts:
+        status: unsupported
+        missingCapabilities:
+        - dependency-observation
+        - horizontal-scaling
+        - load-generation
+        requiredAdapterOperations:
+        - apply-load
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - dependency-topology
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        - workload-state
+        missingAdapterOperations:
+        - apply-load
+        missingObservations:
+        - dependency-topology
+        - workload-state
+        blockingReasons: []
+      aws-retail:
+        status: unsupported
+        missingCapabilities:
+        - horizontal-scaling
+        - recovery-observation
+        requiredAdapterOperations:
+        - apply-load
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - dependency-topology
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        - workload-state
+        missingAdapterOperations: []
+        missingObservations:
+        - recovery-evidence
+        blockingReasons: []
+      keda-rabbitmq:
+        status: unsupported
+        missingCapabilities:
+        - dependency-observation
+        - recovery-observation
+        - workflow-observation
+        requiredAdapterOperations:
+        - apply-load
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - dependency-topology
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        - workload-state
+        missingAdapterOperations: []
+        missingObservations:
+        - dependency-topology
+        - recovery-evidence
+        - workflow-state
+        blockingReasons: []
+      online-boutique:
+        status: unsupported
+        missingCapabilities:
+        - horizontal-scaling
+        - recovery-observation
+        requiredAdapterOperations:
+        - apply-load
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - dependency-topology
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        - workload-state
+        missingAdapterOperations: []
+        missingObservations:
+        - recovery-evidence
+        blockingReasons: []
+      otel-demo:
+        status: unsupported
+        missingCapabilities:
+        - horizontal-scaling
+        - recovery-observation
+        requiredAdapterOperations:
+        - apply-load
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - dependency-topology
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        - workload-state
+        missingAdapterOperations: []
+        missingObservations:
+        - recovery-evidence
+        blockingReasons: []
+  operator-drift-supersedes-action:
+    environments:
+      argo-rollouts:
+        status: unsupported
+        missingCapabilities:
+        - manual-workload-mutation
+        requiredAdapterOperations:
+        - mutate-workload
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - workflow-state
+        - workload-state
+        missingAdapterOperations:
+        - mutate-workload
+        missingObservations:
+        - workload-state
+        blockingReasons: []
+      aws-retail:
+        status: unsupported
+        missingCapabilities:
+        - manual-workload-mutation
+        requiredAdapterOperations:
+        - mutate-workload
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - workflow-state
+        - workload-state
+        missingAdapterOperations:
+        - mutate-workload
+        missingObservations: []
+        blockingReasons: []
+      keda-rabbitmq:
+        status: unsupported
+        missingCapabilities:
+        - manual-workload-mutation
+        - workflow-observation
+        requiredAdapterOperations:
+        - mutate-workload
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - workflow-state
+        - workload-state
+        missingAdapterOperations:
+        - mutate-workload
+        missingObservations:
+        - workflow-state
+        blockingReasons: []
+      online-boutique:
+        status: unsupported
+        missingCapabilities:
+        - manual-workload-mutation
+        requiredAdapterOperations:
+        - mutate-workload
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - workflow-state
+        - workload-state
+        missingAdapterOperations:
+        - mutate-workload
+        missingObservations: []
+        blockingReasons: []
+      otel-demo:
+        status: unsupported
+        missingCapabilities:
+        - manual-workload-mutation
+        requiredAdapterOperations:
+        - mutate-workload
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - workflow-state
+        - workload-state
+        missingAdapterOperations:
+        - mutate-workload
+        missingObservations: []
+        blockingReasons: []
+  resource-saturation:
+    environments:
+      argo-rollouts:
+        status: unsupported
+        missingCapabilities:
+        - dependency-observation
+        - horizontal-scaling
+        - resource-pressure
+        requiredAdapterOperations:
+        - inject-fault
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - dependency-topology
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        - workload-state
+        missingAdapterOperations:
+        - inject-fault
+        missingObservations:
+        - dependency-topology
+        - workload-state
+        blockingReasons: []
+      aws-retail:
+        status: unsupported
+        missingCapabilities:
+        - horizontal-scaling
+        - recovery-observation
+        - resource-pressure
+        requiredAdapterOperations:
+        - inject-fault
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - dependency-topology
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        - workload-state
+        missingAdapterOperations: []
+        missingObservations:
+        - recovery-evidence
+        blockingReasons: []
+      keda-rabbitmq:
+        status: unsupported
+        missingCapabilities:
+        - dependency-observation
+        - recovery-observation
+        - resource-pressure
+        - workflow-observation
+        requiredAdapterOperations:
+        - inject-fault
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - dependency-topology
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        - workload-state
+        missingAdapterOperations:
+        - inject-fault
+        missingObservations:
+        - dependency-topology
+        - recovery-evidence
+        - workflow-state
+        blockingReasons: []
+      online-boutique:
+        status: unsupported
+        missingCapabilities:
+        - horizontal-scaling
+        - recovery-observation
+        - resource-pressure
+        requiredAdapterOperations:
+        - inject-fault
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - dependency-topology
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        - workload-state
+        missingAdapterOperations: []
+        missingObservations:
+        - recovery-evidence
+        blockingReasons: []
+      otel-demo:
+        status: unsupported
+        missingCapabilities:
+        - horizontal-scaling
+        - recovery-observation
+        - resource-pressure
+        requiredAdapterOperations:
+        - inject-fault
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - dependency-topology
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        - workload-state
+        missingAdapterOperations: []
+        missingObservations:
+        - recovery-evidence
+        blockingReasons: []
+  scale-versus-rollback-conflict:
+    environments:
+      argo-rollouts:
+        status: unsupported
+        missingCapabilities:
+        - horizontal-scaling
+        - load-generation
+        requiredAdapterOperations:
+        - apply-load
+        - deploy-version
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - deployment-version
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        - workload-state
+        missingAdapterOperations:
+        - apply-load
+        missingObservations:
+        - workload-state
+        blockingReasons: []
+      aws-retail:
+        status: unsupported
+        missingCapabilities:
+        - deployment-transition
+        - horizontal-scaling
+        - progressive-delivery
+        - recovery-observation
+        requiredAdapterOperations:
+        - apply-load
+        - deploy-version
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - deployment-version
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        - workload-state
+        missingAdapterOperations:
+        - deploy-version
+        missingObservations:
+        - deployment-version
+        - recovery-evidence
+        blockingReasons: []
+      keda-rabbitmq:
+        status: unsupported
+        missingCapabilities:
+        - deployment-transition
+        - progressive-delivery
+        - recovery-observation
+        - workflow-observation
+        requiredAdapterOperations:
+        - apply-load
+        - deploy-version
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - deployment-version
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        - workload-state
+        missingAdapterOperations:
+        - deploy-version
+        missingObservations:
+        - deployment-version
+        - recovery-evidence
+        - workflow-state
+        blockingReasons: []
+      online-boutique:
+        status: unsupported
+        missingCapabilities:
+        - deployment-transition
+        - horizontal-scaling
+        - progressive-delivery
+        - recovery-observation
+        requiredAdapterOperations:
+        - apply-load
+        - deploy-version
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - deployment-version
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        - workload-state
+        missingAdapterOperations:
+        - deploy-version
+        missingObservations:
+        - deployment-version
+        - recovery-evidence
+        blockingReasons: []
+      otel-demo:
+        status: unsupported
+        missingCapabilities:
+        - deployment-transition
+        - horizontal-scaling
+        - progressive-delivery
+        - recovery-observation
+        requiredAdapterOperations:
+        - apply-load
+        - deploy-version
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - deployment-version
+        - mutation-count
+        - recovery-evidence
+        - workflow-state
+        - workload-state
+        missingAdapterOperations:
+        - deploy-version
+        missingObservations:
+        - deployment-version
+        - recovery-evidence
+        blockingReasons: []
+  stale-opa-fail-closed:
+    environments:
+      argo-rollouts:
+        status: unsupported
+        missingCapabilities:
+        - policy-bundle-control
+        requiredAdapterOperations:
+        - control-policy-bundle
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - policy-state
+        - workflow-state
+        missingAdapterOperations:
+        - control-policy-bundle
+        missingObservations:
+        - policy-state
+        blockingReasons: []
+      aws-retail:
+        status: unsupported
+        missingCapabilities:
+        - policy-bundle-control
+        requiredAdapterOperations:
+        - control-policy-bundle
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - policy-state
+        - workflow-state
+        missingAdapterOperations:
+        - control-policy-bundle
+        missingObservations:
+        - policy-state
+        blockingReasons: []
+      keda-rabbitmq:
+        status: unsupported
+        missingCapabilities:
+        - policy-bundle-control
+        - workflow-observation
+        requiredAdapterOperations:
+        - control-policy-bundle
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - policy-state
+        - workflow-state
+        missingAdapterOperations:
+        - control-policy-bundle
+        missingObservations:
+        - policy-state
+        - workflow-state
+        blockingReasons: []
+      online-boutique:
+        status: unsupported
+        missingCapabilities:
+        - policy-bundle-control
+        requiredAdapterOperations:
+        - control-policy-bundle
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - policy-state
+        - workflow-state
+        missingAdapterOperations:
+        - control-policy-bundle
+        missingObservations:
+        - policy-state
+        blockingReasons: []
+      otel-demo:
+        status: unsupported
+        missingCapabilities:
+        - policy-bundle-control
+        requiredAdapterOperations:
+        - control-policy-bundle
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - policy-state
+        - workflow-state
+        missingAdapterOperations:
+        - control-policy-bundle
+        missingObservations:
+        - policy-state
+        blockingReasons: []
+  stale-signoz-no-scale-down:
+    environments:
+      argo-rollouts:
+        status: unsupported
+        missingCapabilities:
+        - scale-to-zero
+        - scaler-observation
+        - telemetry-interruption
+        requiredAdapterOperations:
+        - interrupt-telemetry
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - scaler-result
+        - telemetry-quality
+        missingAdapterOperations:
+        - interrupt-telemetry
+        missingObservations:
+        - scaler-result
+        - telemetry-quality
+        blockingReasons: []
+      aws-retail:
+        status: unsupported
+        missingCapabilities:
+        - scale-to-zero
+        - scaler-observation
+        - telemetry-interruption
+        requiredAdapterOperations:
+        - interrupt-telemetry
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - scaler-result
+        - telemetry-quality
+        missingAdapterOperations:
+        - interrupt-telemetry
+        missingObservations:
+        - scaler-result
+        - telemetry-quality
+        blockingReasons: []
+      keda-rabbitmq:
+        status: unsupported
+        missingCapabilities:
+        - telemetry-interruption
+        requiredAdapterOperations:
+        - interrupt-telemetry
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - scaler-result
+        - telemetry-quality
+        missingAdapterOperations:
+        - interrupt-telemetry
+        missingObservations:
+        - telemetry-quality
+        blockingReasons: []
+      online-boutique:
+        status: unsupported
+        missingCapabilities:
+        - scale-to-zero
+        - scaler-observation
+        - telemetry-interruption
+        requiredAdapterOperations:
+        - interrupt-telemetry
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - scaler-result
+        - telemetry-quality
+        missingAdapterOperations:
+        - interrupt-telemetry
+        missingObservations:
+        - scaler-result
+        - telemetry-quality
+        blockingReasons: []
+      otel-demo:
+        status: unsupported
+        missingCapabilities:
+        - scale-to-zero
+        - scaler-observation
+        - telemetry-interruption
+        requiredAdapterOperations:
+        - interrupt-telemetry
+        - observe-state
+        requiredObservations:
+        - audit-event
+        - mutation-count
+        - scaler-result
+        - telemetry-quality
+        missingAdapterOperations:
+        - interrupt-telemetry
+        missingObservations:
+        - scaler-result
+        - telemetry-quality
+        blockingReasons: []
+  telemetry-failure:
+    environments:
+      argo-rollouts:
+        status: unsupported
+        missingCapabilities:
+        - telemetry-interruption
+        requiredAdapterOperations:
+        - interrupt-telemetry
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - mutation-count
+        - recovery-evidence
+        - telemetry-quality
+        - workflow-state
+        missingAdapterOperations:
+        - interrupt-telemetry
+        missingObservations:
+        - telemetry-quality
+        blockingReasons: []
+      aws-retail:
+        status: unsupported
+        missingCapabilities:
+        - recovery-observation
+        - telemetry-interruption
+        requiredAdapterOperations:
+        - interrupt-telemetry
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - mutation-count
+        - recovery-evidence
+        - telemetry-quality
+        - workflow-state
+        missingAdapterOperations:
+        - interrupt-telemetry
+        missingObservations:
+        - recovery-evidence
+        - telemetry-quality
+        blockingReasons: []
+      keda-rabbitmq:
+        status: unsupported
+        missingCapabilities:
+        - recovery-observation
+        - telemetry-interruption
+        - workflow-observation
+        requiredAdapterOperations:
+        - interrupt-telemetry
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - mutation-count
+        - recovery-evidence
+        - telemetry-quality
+        - workflow-state
+        missingAdapterOperations:
+        - interrupt-telemetry
+        missingObservations:
+        - recovery-evidence
+        - telemetry-quality
+        - workflow-state
+        blockingReasons: []
+      online-boutique:
+        status: unsupported
+        missingCapabilities:
+        - recovery-observation
+        - telemetry-interruption
+        requiredAdapterOperations:
+        - interrupt-telemetry
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - mutation-count
+        - recovery-evidence
+        - telemetry-quality
+        - workflow-state
+        missingAdapterOperations:
+        - interrupt-telemetry
+        missingObservations:
+        - recovery-evidence
+        - telemetry-quality
+        blockingReasons: []
+      otel-demo:
+        status: unsupported
+        missingCapabilities:
+        - recovery-observation
+        - telemetry-interruption
+        requiredAdapterOperations:
+        - interrupt-telemetry
+        - observe-state
+        - wait-for-healthy-baseline
+        requiredObservations:
+        - audit-event
+        - baseline-health
+        - mutation-count
+        - recovery-evidence
+        - telemetry-quality
+        - workflow-state
+        missingAdapterOperations:
+        - interrupt-telemetry
+        missingObservations:
+        - recovery-evidence
+        - telemetry-quality
+        blockingReasons: []

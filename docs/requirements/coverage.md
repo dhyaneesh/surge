@@ -7,7 +7,7 @@ Normative source: `docs/spec/guardian-production-v1.md`.
 
 - Normative requirements: **121**
 - Normative acceptance tests: **28**
-- Supporting design capabilities: **2**
+- Supporting design capabilities: **3**
 - Implementation test obligations: **149**
 - Structured ambiguities: **222**
 - Duplicate IDs: **0** (required for generation)
@@ -59,6 +59,7 @@ These records are non-normative implementation mappings and do not participate i
 | --- | --- | --- | --- | --- |
 | `DESIGN-HARNESS-001` | `docs/superpowers/specs/2026-07-22-verification-harness-repair-design.md` §Goal, Bootstrap Contract, Task Architecture, and Tests | `implemented` | `scripts/bootstrap.sh`, `scripts/verification-preflight.sh`, `tools/verification_harness.py`, `Taskfile.yml` | `tests/unit/test_bootstrap.py`, `tests/unit/test_verification_harness.py` |
 | `DESIGN-SCENARIO-001` | `docs/spec/guardian-production-v1.md` §22 | `implemented` | `testbeds/scenarios/models.py`, `testbeds/scenarios/validation.py`, `testbeds/scenarios/loader.py` | `tests/unit/test_guardian_scenario_schema.py` |
+| `DESIGN-SCENARIO-002` | `docs/architecture/decisions/guardian-scenario-v1alpha2.md` §Decision | `implemented` | `testbeds/scenarios/v1alpha2.py`, `testbeds/scenarios/upgrade.py`, `testbeds/scenarios/compatibility.py`, `testbeds/scenarios/catalog.py`, `testbeds/environments/capabilities.py` | `tests/unit/test_guardian_scenario_v1alpha2.py`, `tests/unit/test_guardian_scenario_upgrade.py`, `tests/unit/test_scenario_compatibility.py`, `tests/unit/test_scenario_catalog.py`, `tests/unit/test_critical_scenario_pack.py`, `tests/contract/test_environment_capability_declarations.py` |
 
 ## Status
 

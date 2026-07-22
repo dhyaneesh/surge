@@ -1,0 +1,78 @@
+apiVersion: tests.guardian.io/v1alpha2
+kind: GuardianScenario
+metadata:
+  name: stale-signoz-no-scale-down
+spec:
+  description: Stale SigNoz input returns safe hold and forbids scale-down.
+  candidateEnvironments:
+  - keda-rabbitmq
+  environmentRequirements:
+    capabilities:
+    - telemetry-interruption
+    - scale-to-zero
+    - scaler-observation
+    - mutation-observation
+  traceability:
+    normativeRequirements:
+    - GRD-SCL-006
+    - GRD-OPA-006
+    acceptanceTests:
+    - AT-SCL-002
+  target:
+    serviceSelector:
+      role: request-processor
+  baseline:
+    healthyFor: 5m
+  stimulus:
+    telemetry:
+      mode: stale
+  expected:
+    incident:
+      incidentClass: telemetry_failure
+      actionable: false
+      telemetryQuality: stale
+    evidence:
+      supporting:
+      - evidenceType: telemetry-quality
+        subjectRole: request-processor
+        freshness: stale
+        tenantRelation: same-tenant
+      contradicting: []
+      requiredFresh: []
+    actions:
+      eligible: []
+      forbidden:
+      - actionType: scale
+        scaleDirection: down
+      proposed: null
+    policy:
+      decision: denied
+      failClosed: true
+    workflow:
+      requiredStates:
+      - active
+      - assessment
+      - closed
+      parentCount:
+        exact: 1
+      proposalCount:
+        atMost: 1
+      approvalCount:
+        exact: 0
+      terminalReason: null
+    mutations:
+      count:
+        exact: 0
+      actions: []
+    audit:
+      events:
+      - eventType: observation-recorded
+        count:
+          atLeast: 1
+    safetyGates: []
+    recovery: null
+    scaler:
+      result: safe-hold
+      fabricatedZeroForbidden: true
+      scaleDownForbidden: true
+      gatewayConvergenceRequired: true

@@ -25,6 +25,12 @@ nonzero and are recorded below. Missing component and environment suites fail; t
 
 ## Harness and toolchain status
 
+The environment-neutral `test:scenario-schema`, `test:scenario-compatibility`,
+and `test:scenarios` targets are active when their checked-in suites exist.
+The `mcp:signoz:check` target delegates to the architecture suite. The
+`mcp:signoz:smoke` and `diagnostics:signoz` targets remain fail-closed baseline
+aliases for the not-yet-configured `test:integration` suite.
+
 Every command below was invoked independently on 2026-07-22 UTC. Task reports
 child failures through process exit status 201; the underlying child status is
 shown in the observation where available.

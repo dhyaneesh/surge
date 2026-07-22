@@ -1,19 +1,16 @@
 apiVersion: tests.guardian.io/v1alpha2
 kind: GuardianScenario
 metadata:
-  name: legitimate-demand-scale-up
+  name: deployment-error-regression
 spec:
-  description: Sustained legitimate demand permits one scale-up.
+  description: A version-linked error regression permits rollback.
   candidateEnvironments:
-  - otel-demo
-  - online-boutique
-  - keda-rabbitmq
+  - argo-rollouts
   environmentRequirements:
     capabilities:
     - healthy-baseline
-    - load-generation
-    - horizontal-scaling
-    - dependency-observation
+    - deployment-transition
+    - progressive-delivery
     - workflow-observation
     - mutation-observation
     - recovery-observation
@@ -26,30 +23,25 @@ spec:
   baseline:
     healthyFor: 5m
   stimulus:
-    load:
-      pattern: sustained
-      multiplier: 4
-      duration: 10m
+    deployment:
+      fromVersion: stable
+      toVersion: error-regression
   expected:
     incident:
-      incidentClass: load_spike
+      incidentClass: deployment_regression
       actionable: true
       telemetryQuality: healthy
     evidence:
       supporting:
-      - evidenceType: load
+      - evidenceType: deployment-event
         subjectRole: request-processor
         freshness: fresh
         tenantRelation: same-tenant
-      - evidenceType: resource-utilization
+      - evidenceType: exceptions
         subjectRole: request-processor
         freshness: fresh
         tenantRelation: same-tenant
-      contradicting:
-      - evidenceType: dependency-health
-        subjectRole: dependency
-        freshness: fresh
-        tenantRelation: same-tenant
+      contradicting: []
       requiredFresh:
       - &id002
         evidenceType: recovery-telemetry
@@ -59,10 +51,10 @@ spec:
     actions:
       eligible:
       - &id001
-        actionType: scale
-        scaleDirection: up
+        actionType: rollback
       forbidden:
-      - actionType: rollback
+      - actionType: scale
+        scaleDirection: any
       proposed: *id001
     policy:
       decision: approval-required
@@ -90,15 +82,16 @@ spec:
         count:
           atLeast: 1
     safetyGates:
+    - identity-before-version-action
     - post-action-evidence-for-recovery
     recovery:
-      contractRef: legitimate-demand-scale-up-recovery
+      contractRef: deployment-error-regression-recovery
       contractVersion: 1
       registryVersion: critical-pack-v1
       requireFreshTelemetry: true
       evidence:
       - *id002
       conditions:
-      - capacity-converged
-      - service-healthy
+      - error-improved
+      - desired-version-restored
       minimumPostActionWindows: 1

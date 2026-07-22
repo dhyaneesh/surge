@@ -4,6 +4,9 @@ vars:
   UV: "{{.ROOT_DIR}}/.tools/bin/uv"
   PREFLIGHT: "{{.ROOT_DIR}}/scripts/verification-preflight.sh"
 
+env:
+  TMPDIR: /tmp
+
 tasks:
   bootstrap:
     cmds:
@@ -63,29 +66,53 @@ tasks:
   mcp:signoz:check:
     desc: Check the optional SigNoz MCP architectural boundary without loading MCP
     cmds:
+      - "{{.PREFLIGHT}} mcp:signoz:check"
       - task: test:architecture
 
   mcp:signoz:smoke:
     desc: Reserved integration-only SigNoz MCP smoke target; no client is implemented yet
     cmds:
+      - "{{.PREFLIGHT}} mcp:signoz:smoke"
       - task: test:integration
 
   diagnostics:signoz:
     desc: Reserved integration-only post-verdict SigNoz diagnostic target; no client is implemented yet
     cmds:
+      - "{{.PREFLIGHT}} diagnostics:signoz"
       - task: test:integration
+
+  test:scenario-schema:
+    desc: Validate GuardianScenario v1alpha1, v1alpha2, and explicit migration
+    cmds:
+      - "{{.PREFLIGHT}} test:scenario-schema"
+      - "{{.UV}} run --locked --no-sync python -m tools.verification_harness suite test:scenario-schema tests/unit/test_guardian_scenario_schema.py tests/unit/test_guardian_scenario_v1alpha2.py tests/unit/test_guardian_scenario_upgrade.py"
+      - "{{.UV}} run --locked pytest tests/unit/test_guardian_scenario_schema.py tests/unit/test_guardian_scenario_v1alpha2.py tests/unit/test_guardian_scenario_upgrade.py"
+
+  test:scenario-compatibility:
+    desc: Validate capability derivation, preflight, environment declarations, and catalog
+    cmds:
+      - "{{.PREFLIGHT}} test:scenario-compatibility"
+      - "{{.UV}} run --locked --no-sync python -m tools.verification_harness suite test:scenario-compatibility tests/unit/test_scenario_compatibility.py tests/unit/test_scenario_catalog.py tests/contract/test_environment_capability_declarations.py"
+      - "{{.UV}} run --locked pytest tests/unit/test_scenario_compatibility.py tests/unit/test_scenario_catalog.py tests/contract/test_environment_capability_declarations.py"
+
+  test:scenarios:
+    desc: Run all environment-neutral scenario contract checks
+    cmds:
+      - "{{.PREFLIGHT}} test:scenarios"
+      - "{{.UV}} run --locked --no-sync python -m tools.verification_harness suite test:scenarios tests/unit/test_guardian_scenario_schema.py tests/unit/test_guardian_scenario_v1alpha2.py tests/unit/test_guardian_scenario_upgrade.py tests/unit/test_critical_scenario_pack.py tests/unit/test_scenario_compatibility.py tests/unit/test_scenario_catalog.py tests/contract/test_environment_capability_declarations.py tests/architecture"
+      - "{{.UV}} run --locked pytest tests/unit/test_guardian_scenario_schema.py tests/unit/test_guardian_scenario_v1alpha2.py tests/unit/test_guardian_scenario_upgrade.py tests/unit/test_critical_scenario_pack.py tests/unit/test_scenario_compatibility.py tests/unit/test_scenario_catalog.py tests/contract/test_environment_capability_declarations.py tests/architecture"
 
   test:testbeds-unit:
     cmds:
       - "{{.PREFLIGHT}} test:testbeds-unit"
-      - "{{.UV}} run --locked --no-sync python -m tools.verification_harness suite test:testbeds-unit tests/unit/test_otel_demo_adapter.py tests/unit/test_aws_retail_adapter.py tests/unit/test_online_boutique_adapter.py tests/unit/test_argo_rollouts_adapter.py tests/unit/test_keda_rabbitmq_adapter.py tests/unit/test_environment_adapter_contract.py tests/unit/test_guardian_scenario_schema.py"
-      - "{{.UV}} run --locked pytest tests/unit/test_otel_demo_adapter.py tests/unit/test_aws_retail_adapter.py tests/unit/test_online_boutique_adapter.py tests/unit/test_argo_rollouts_adapter.py tests/unit/test_keda_rabbitmq_adapter.py tests/unit/test_environment_adapter_contract.py tests/unit/test_guardian_scenario_schema.py"
+      - "{{.UV}} run --locked --no-sync python -m tools.verification_harness suite test:testbeds-unit tests/unit/test_otel_demo_adapter.py tests/unit/test_aws_retail_adapter.py tests/unit/test_online_boutique_adapter.py tests/unit/test_argo_rollouts_adapter.py tests/unit/test_keda_rabbitmq_adapter.py tests/unit/test_environment_adapter_contract.py tests/unit/test_guardian_scenario_schema.py tests/unit/test_guardian_scenario_v1alpha2.py tests/unit/test_guardian_scenario_upgrade.py tests/unit/test_critical_scenario_pack.py tests/unit/test_scenario_compatibility.py tests/unit/test_scenario_catalog.py"
+      - "{{.UV}} run --locked pytest tests/unit/test_otel_demo_adapter.py tests/unit/test_aws_retail_adapter.py tests/unit/test_online_boutique_adapter.py tests/unit/test_argo_rollouts_adapter.py tests/unit/test_keda_rabbitmq_adapter.py tests/unit/test_environment_adapter_contract.py tests/unit/test_guardian_scenario_schema.py tests/unit/test_guardian_scenario_v1alpha2.py tests/unit/test_guardian_scenario_upgrade.py tests/unit/test_critical_scenario_pack.py tests/unit/test_scenario_compatibility.py tests/unit/test_scenario_catalog.py"
 
   test:testbeds-contract:
     cmds:
       - "{{.PREFLIGHT}} test:testbeds-contract"
-      - "{{.UV}} run --locked --no-sync python -m tools.verification_harness suite test:testbeds-contract tests/contract/test_otel_demo_adapter_contract.py tests/contract/test_aws_retail_adapter_contract.py tests/contract/test_online_boutique_adapter_contract.py tests/contract/test_argo_rollouts_adapter_contract.py tests/contract/test_keda_rabbitmq_adapter_contract.py"
-      - "{{.UV}} run --locked pytest tests/contract/test_otel_demo_adapter_contract.py tests/contract/test_aws_retail_adapter_contract.py tests/contract/test_online_boutique_adapter_contract.py tests/contract/test_argo_rollouts_adapter_contract.py tests/contract/test_keda_rabbitmq_adapter_contract.py"
+      - "{{.UV}} run --locked --no-sync python -m tools.verification_harness suite test:testbeds-contract tests/contract/test_otel_demo_adapter_contract.py tests/contract/test_aws_retail_adapter_contract.py tests/contract/test_online_boutique_adapter_contract.py tests/contract/test_argo_rollouts_adapter_contract.py tests/contract/test_keda_rabbitmq_adapter_contract.py tests/contract/test_environment_capability_declarations.py"
+      - "{{.UV}} run --locked pytest tests/contract/test_otel_demo_adapter_contract.py tests/contract/test_aws_retail_adapter_contract.py tests/contract/test_online_boutique_adapter_contract.py tests/contract/test_argo_rollouts_adapter_contract.py tests/contract/test_keda_rabbitmq_adapter_contract.py tests/contract/test_environment_capability_declarations.py"
 
   test:policy:
     cmds:

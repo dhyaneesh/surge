@@ -49,6 +49,24 @@ design_capabilities:
   tests:
   - tests/unit/test_guardian_scenario_schema.py
   status: implemented
+- id: DESIGN-SCENARIO-002
+  source:
+    document: docs/architecture/decisions/guardian-scenario-v1alpha2.md
+    section: Decision
+  implementation:
+  - testbeds/scenarios/v1alpha2.py
+  - testbeds/scenarios/upgrade.py
+  - testbeds/scenarios/compatibility.py
+  - testbeds/scenarios/catalog.py
+  - testbeds/environments/capabilities.py
+  tests:
+  - tests/unit/test_guardian_scenario_v1alpha2.py
+  - tests/unit/test_guardian_scenario_upgrade.py
+  - tests/unit/test_scenario_compatibility.py
+  - tests/unit/test_scenario_catalog.py
+  - tests/unit/test_critical_scenario_pack.py
+  - tests/contract/test_environment_capability_declarations.py
+  status: implemented
 requirements:
 - id: GRD-REA-001
   source:

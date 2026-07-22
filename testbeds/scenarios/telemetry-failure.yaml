@@ -1,0 +1,81 @@
+apiVersion: tests.guardian.io/v1alpha2
+kind: GuardianScenario
+metadata:
+  name: telemetry-failure
+spec:
+  description: Unusable telemetry fails closed and requires fresh restoration.
+  candidateEnvironments:
+  - otel-demo
+  - aws-retail
+  - online-boutique
+  - argo-rollouts
+  - keda-rabbitmq
+  environmentRequirements:
+    capabilities:
+    - healthy-baseline
+    - telemetry-interruption
+    - workflow-observation
+    - mutation-observation
+    - recovery-observation
+  traceability:
+    normativeRequirements:
+    - GRD-CLS-001
+    - GRD-CLS-003
+    - GRD-CLS-005
+    acceptanceTests:
+    - AT-CLS-001
+  target:
+    serviceSelector:
+      role: request-processor
+  baseline:
+    healthyFor: 5m
+  stimulus:
+    telemetry:
+      mode: interrupted
+  expected:
+    incident:
+      incidentClass: telemetry_failure
+      actionable: false
+      telemetryQuality: failed
+    evidence:
+      supporting:
+      - evidenceType: telemetry-quality
+        subjectRole: request-processor
+        freshness: missing
+        tenantRelation: same-tenant
+      contradicting: []
+      requiredFresh: []
+    actions:
+      eligible: []
+      forbidden:
+      - actionType: scale
+        scaleDirection: any
+      - actionType: rollback
+      proposed: null
+    policy:
+      decision: denied
+      failClosed: true
+    workflow:
+      requiredStates:
+      - active
+      - telemetry-failure
+      - closed
+      parentCount:
+        exact: 1
+      proposalCount:
+        atMost: 1
+      approvalCount:
+        exact: 0
+      terminalReason: telemetry-unusable
+    mutations:
+      count:
+        exact: 0
+      actions: []
+    audit:
+      events:
+      - eventType: observation-recorded
+        count:
+          atLeast: 1
+    safetyGates:
+    - fresh-evidence-before-eligibility
+    recovery: null

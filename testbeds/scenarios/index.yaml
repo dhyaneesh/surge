@@ -1,0 +1,431 @@
+scenarios:
+- name: cross-tenant-evidence-rejected
+  apiVersion: tests.guardian.io/v1alpha2
+  file: testbeds/scenarios/cross-tenant-evidence-rejected.yaml
+  requiredCapabilities:
+  - multi-tenant-fixture
+  - mutation-observation
+  - workflow-observation
+  candidateEnvironments:
+  - otel-demo
+  - aws-retail
+  - online-boutique
+  - argo-rollouts
+  - keda-rabbitmq
+  description: Foreign tenant evidence is rejected before scoring and I/O.
+  expectedIncidentClass: null
+  allowedActions: []
+  forbiddenActions: []
+  mutationExpected: false
+  approvalRequired: false
+  freshRecoveryEvidenceRequired: false
+  normativeRequirements:
+  - GRD-TEN-001
+  - GRD-TEN-006
+  acceptanceTests:
+  - AT-TEN-001
+  implementationStatus: implemented
+  compatibilityResolved: true
+- name: dependency-failure-do-not-scale-caller
+  apiVersion: tests.guardian.io/v1alpha2
+  file: testbeds/scenarios/dependency-failure-do-not-scale-caller.yaml
+  requiredCapabilities:
+  - dependency-observation
+  - fault-injection
+  - healthy-baseline
+  - mutation-observation
+  - workflow-observation
+  candidateEnvironments:
+  - otel-demo
+  - aws-retail
+  - online-boutique
+  description: A failing dependency does not authorize caller scaling.
+  expectedIncidentClass: dependency_failure
+  allowedActions: []
+  forbiddenActions:
+  - actionType: scale
+    scaleDirection: any
+  mutationExpected: false
+  approvalRequired: false
+  freshRecoveryEvidenceRequired: false
+  normativeRequirements: []
+  acceptanceTests: []
+  implementationStatus: implemented
+  compatibilityResolved: true
+- name: deployment-error-regression
+  apiVersion: tests.guardian.io/v1alpha2
+  file: testbeds/scenarios/deployment-error-regression.yaml
+  requiredCapabilities:
+  - deployment-transition
+  - healthy-baseline
+  - mutation-observation
+  - progressive-delivery
+  - recovery-observation
+  - workflow-observation
+  candidateEnvironments:
+  - argo-rollouts
+  description: A version-linked error regression permits rollback.
+  expectedIncidentClass: deployment_regression
+  allowedActions:
+  - actionType: rollback
+    scaleDirection: null
+  forbiddenActions:
+  - actionType: scale
+    scaleDirection: any
+  mutationExpected: true
+  approvalRequired: true
+  freshRecoveryEvidenceRequired: true
+  normativeRequirements: []
+  acceptanceTests: []
+  implementationStatus: implemented
+  compatibilityResolved: true
+- name: deployment-latency-regression
+  apiVersion: tests.guardian.io/v1alpha2
+  file: testbeds/scenarios/deployment-latency-regression.yaml
+  requiredCapabilities:
+  - dependency-observation
+  - deployment-transition
+  - healthy-baseline
+  - mutation-observation
+  - progressive-delivery
+  - recovery-observation
+  - workflow-observation
+  candidateEnvironments:
+  - argo-rollouts
+  description: A version-linked latency regression permits rollback.
+  expectedIncidentClass: deployment_regression
+  allowedActions:
+  - actionType: rollback
+    scaleDirection: null
+  forbiddenActions:
+  - actionType: scale
+    scaleDirection: any
+  mutationExpected: true
+  approvalRequired: true
+  freshRecoveryEvidenceRequired: true
+  normativeRequirements: []
+  acceptanceTests: []
+  implementationStatus: implemented
+  compatibilityResolved: true
+- name: duplicate-alert-single-workflow
+  apiVersion: tests.guardian.io/v1alpha2
+  file: testbeds/scenarios/duplicate-alert-single-workflow.yaml
+  requiredCapabilities:
+  - incident-ingress-control
+  - mutation-observation
+  - workflow-observation
+  candidateEnvironments:
+  - otel-demo
+  - aws-retail
+  - online-boutique
+  - argo-rollouts
+  - keda-rabbitmq
+  description: Duplicate incident deliveries converge on one tenant-scoped parent.
+  expectedIncidentClass: null
+  allowedActions: []
+  forbiddenActions: []
+  mutationExpected: false
+  approvalRequired: false
+  freshRecoveryEvidenceRequired: false
+  normativeRequirements:
+  - GRD-WF-001
+  acceptanceTests:
+  - AT-WF-001
+  implementationStatus: implemented
+  compatibilityResolved: true
+- name: expired-approval-no-mutation
+  apiVersion: tests.guardian.io/v1alpha2
+  file: testbeds/scenarios/expired-approval-no-mutation.yaml
+  requiredCapabilities:
+  - approval-control
+  - mutation-observation
+  - workflow-observation
+  candidateEnvironments:
+  - otel-demo
+  - aws-retail
+  - online-boutique
+  - argo-rollouts
+  - keda-rabbitmq
+  description: Expired approval and replay attempts cannot mutate.
+  expectedIncidentClass: null
+  allowedActions:
+  - actionType: rollback
+    scaleDirection: null
+  forbiddenActions: []
+  mutationExpected: false
+  approvalRequired: false
+  freshRecoveryEvidenceRequired: false
+  normativeRequirements:
+  - GRD-TTL-003
+  - GRD-TTL-005
+  acceptanceTests:
+  - AT-TTL-001
+  implementationStatus: implemented
+  compatibilityResolved: true
+- name: healthy-load-no-action
+  apiVersion: tests.guardian.io/v1alpha2
+  file: testbeds/scenarios/healthy-load-no-action.yaml
+  requiredCapabilities:
+  - healthy-baseline
+  - load-generation
+  - mutation-observation
+  - workflow-observation
+  candidateEnvironments:
+  - otel-demo
+  - aws-retail
+  - online-boutique
+  - argo-rollouts
+  - keda-rabbitmq
+  description: Healthy elevated load remains observation-only.
+  expectedIncidentClass: null
+  allowedActions: []
+  forbiddenActions:
+  - actionType: scale
+    scaleDirection: any
+  - actionType: rollback
+    scaleDirection: null
+  mutationExpected: false
+  approvalRequired: false
+  freshRecoveryEvidenceRequired: false
+  normativeRequirements: []
+  acceptanceTests: []
+  implementationStatus: implemented
+  compatibilityResolved: true
+- name: healthy-telemetry-unknown-cause
+  apiVersion: tests.guardian.io/v1alpha2
+  file: testbeds/scenarios/healthy-telemetry-unknown-cause.yaml
+  requiredCapabilities:
+  - ambiguous-symptom
+  - healthy-baseline
+  - mutation-observation
+  - workflow-observation
+  candidateEnvironments:
+  - otel-demo
+  description: Fresh complete telemetry with no eligible cause remains unknown.
+  expectedIncidentClass: unknown
+  allowedActions: []
+  forbiddenActions:
+  - actionType: scale
+    scaleDirection: any
+  - actionType: rollback
+    scaleDirection: null
+  mutationExpected: false
+  approvalRequired: false
+  freshRecoveryEvidenceRequired: false
+  normativeRequirements:
+  - GRD-CLS-001
+  - GRD-CLS-004
+  acceptanceTests:
+  - AT-CLS-002
+  implementationStatus: implemented
+  compatibilityResolved: true
+- name: legitimate-demand-scale-up
+  apiVersion: tests.guardian.io/v1alpha2
+  file: testbeds/scenarios/legitimate-demand-scale-up.yaml
+  requiredCapabilities:
+  - dependency-observation
+  - healthy-baseline
+  - horizontal-scaling
+  - load-generation
+  - mutation-observation
+  - recovery-observation
+  - workflow-observation
+  candidateEnvironments:
+  - otel-demo
+  - online-boutique
+  - keda-rabbitmq
+  description: Sustained legitimate demand permits one scale-up.
+  expectedIncidentClass: load_spike
+  allowedActions:
+  - actionType: scale
+    scaleDirection: up
+  forbiddenActions:
+  - actionType: rollback
+    scaleDirection: null
+  mutationExpected: true
+  approvalRequired: true
+  freshRecoveryEvidenceRequired: true
+  normativeRequirements: []
+  acceptanceTests: []
+  implementationStatus: implemented
+  compatibilityResolved: true
+- name: operator-drift-supersedes-action
+  apiVersion: tests.guardian.io/v1alpha2
+  file: testbeds/scenarios/operator-drift-supersedes-action.yaml
+  requiredCapabilities:
+  - manual-workload-mutation
+  - mutation-observation
+  - workflow-observation
+  candidateEnvironments:
+  - argo-rollouts
+  - keda-rabbitmq
+  description: External protected-field drift supersedes an outdated proposal.
+  expectedIncidentClass: null
+  allowedActions:
+  - actionType: rollback
+    scaleDirection: null
+  forbiddenActions: []
+  mutationExpected: false
+  approvalRequired: false
+  freshRecoveryEvidenceRequired: false
+  normativeRequirements:
+  - GRD-DRIFT-001
+  - GRD-DRIFT-003
+  acceptanceTests:
+  - AT-DRIFT-001
+  implementationStatus: implemented
+  compatibilityResolved: true
+- name: resource-saturation
+  apiVersion: tests.guardian.io/v1alpha2
+  file: testbeds/scenarios/resource-saturation.yaml
+  requiredCapabilities:
+  - dependency-observation
+  - healthy-baseline
+  - horizontal-scaling
+  - mutation-observation
+  - recovery-observation
+  - resource-pressure
+  - workflow-observation
+  candidateEnvironments:
+  - otel-demo
+  - aws-retail
+  - online-boutique
+  - argo-rollouts
+  - keda-rabbitmq
+  description: Local resource pressure permits scale-up without rollback.
+  expectedIncidentClass: resource_saturation
+  allowedActions:
+  - actionType: scale
+    scaleDirection: up
+  forbiddenActions:
+  - actionType: rollback
+    scaleDirection: null
+  mutationExpected: true
+  approvalRequired: true
+  freshRecoveryEvidenceRequired: true
+  normativeRequirements: []
+  acceptanceTests: []
+  implementationStatus: implemented
+  compatibilityResolved: true
+- name: scale-versus-rollback-conflict
+  apiVersion: tests.guardian.io/v1alpha2
+  file: testbeds/scenarios/scale-versus-rollback-conflict.yaml
+  requiredCapabilities:
+  - deployment-transition
+  - healthy-baseline
+  - horizontal-scaling
+  - load-generation
+  - mutation-observation
+  - progressive-delivery
+  - recovery-observation
+  - workflow-observation
+  candidateEnvironments:
+  - argo-rollouts
+  description: Eligible scale and rollback candidates enter unresolved conflict.
+  expectedIncidentClass: deployment_regression
+  allowedActions:
+  - actionType: scale
+    scaleDirection: up
+  - actionType: rollback
+    scaleDirection: null
+  forbiddenActions: []
+  mutationExpected: false
+  approvalRequired: false
+  freshRecoveryEvidenceRequired: false
+  normativeRequirements:
+  - GRD-ACT-001
+  - GRD-ACT-002
+  - GRD-ACT-005
+  acceptanceTests:
+  - AT-ACT-001
+  implementationStatus: implemented
+  compatibilityResolved: true
+- name: stale-opa-fail-closed
+  apiVersion: tests.guardian.io/v1alpha2
+  file: testbeds/scenarios/stale-opa-fail-closed.yaml
+  requiredCapabilities:
+  - mutation-observation
+  - policy-bundle-control
+  - workflow-observation
+  candidateEnvironments:
+  - otel-demo
+  - aws-retail
+  - online-boutique
+  - argo-rollouts
+  - keda-rabbitmq
+  description: An unusable OPA bundle denies every new write.
+  expectedIncidentClass: null
+  allowedActions:
+  - actionType: rollback
+    scaleDirection: null
+  forbiddenActions: []
+  mutationExpected: false
+  approvalRequired: false
+  freshRecoveryEvidenceRequired: false
+  normativeRequirements:
+  - GRD-OPA-003
+  - GRD-OPA-006
+  acceptanceTests:
+  - AT-OPA-001
+  implementationStatus: implemented
+  compatibilityResolved: true
+- name: stale-signoz-no-scale-down
+  apiVersion: tests.guardian.io/v1alpha2
+  file: testbeds/scenarios/stale-signoz-no-scale-down.yaml
+  requiredCapabilities:
+  - mutation-observation
+  - scale-to-zero
+  - scaler-observation
+  - telemetry-interruption
+  candidateEnvironments:
+  - keda-rabbitmq
+  description: Stale SigNoz input returns safe hold and forbids scale-down.
+  expectedIncidentClass: telemetry_failure
+  allowedActions: []
+  forbiddenActions:
+  - actionType: scale
+    scaleDirection: down
+  mutationExpected: false
+  approvalRequired: false
+  freshRecoveryEvidenceRequired: false
+  normativeRequirements:
+  - GRD-SCL-006
+  - GRD-OPA-006
+  acceptanceTests:
+  - AT-SCL-002
+  implementationStatus: implemented
+  compatibilityResolved: true
+- name: telemetry-failure
+  apiVersion: tests.guardian.io/v1alpha2
+  file: testbeds/scenarios/telemetry-failure.yaml
+  requiredCapabilities:
+  - healthy-baseline
+  - mutation-observation
+  - recovery-observation
+  - telemetry-interruption
+  - workflow-observation
+  candidateEnvironments:
+  - otel-demo
+  - aws-retail
+  - online-boutique
+  - argo-rollouts
+  - keda-rabbitmq
+  description: Unusable telemetry fails closed and requires fresh restoration.
+  expectedIncidentClass: telemetry_failure
+  allowedActions: []
+  forbiddenActions:
+  - actionType: scale
+    scaleDirection: any
+  - actionType: rollback
+    scaleDirection: null
+  mutationExpected: false
+  approvalRequired: false
+  freshRecoveryEvidenceRequired: false
+  normativeRequirements:
+  - GRD-CLS-001
+  - GRD-CLS-003
+  - GRD-CLS-005
+  acceptanceTests:
+  - AT-CLS-001
+  implementationStatus: implemented
+  compatibilityResolved: true

@@ -1,0 +1,69 @@
+apiVersion: tests.guardian.io/v1alpha2
+kind: GuardianScenario
+metadata:
+  name: operator-drift-supersedes-action
+spec:
+  description: External protected-field drift supersedes an outdated proposal.
+  candidateEnvironments:
+  - argo-rollouts
+  - keda-rabbitmq
+  environmentRequirements:
+    capabilities:
+    - manual-workload-mutation
+    - workflow-observation
+    - mutation-observation
+  traceability:
+    normativeRequirements:
+    - GRD-DRIFT-001
+    - GRD-DRIFT-003
+    acceptanceTests:
+    - AT-DRIFT-001
+  target:
+    serviceSelector:
+      role: request-processor
+  baseline:
+    healthyFor: 5m
+  stimulus:
+    operatorDrift:
+      protectedFieldChangeBeforeMutation: true
+  expected:
+    incident:
+      incidentClass: null
+      actionable: false
+      telemetryQuality: healthy
+    evidence:
+      supporting: []
+      contradicting: []
+      requiredFresh: []
+    actions:
+      eligible:
+      - actionType: rollback
+      forbidden: []
+      proposed: null
+    policy:
+      decision: denied
+      failClosed: true
+    workflow:
+      requiredStates:
+      - active
+      - assessment
+      - closed
+      parentCount:
+        exact: 1
+      proposalCount:
+        atMost: 1
+      approvalCount:
+        exact: 0
+      terminalReason: operator-drift
+    mutations:
+      count:
+        exact: 0
+      actions: []
+    audit:
+      events:
+      - eventType: action-rejected
+        count:
+          atLeast: 1
+    safetyGates:
+    - drift-before-each-mutation
+    recovery: null
