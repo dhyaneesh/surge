@@ -1,0 +1,13 @@
+environment: keda-rabbitmq
+source_sections: [20.5 KEDA RabbitMQ Sample, 21 Test environment adapter contract]
+obligations:
+  immutable_release: {implementation: testbeds/environments/keda_rabbitmq.py, tests: [test_release_is_immutable_and_adapter_isolated]}
+  namespace_isolation: {implementation: testbeds/adapters/keda_rabbitmq.py, tests: [test_release_is_immutable_and_adapter_isolated]}
+  healthy_baseline: {implementation: testbeds/adapters/keda_rabbitmq.py, tests: [test_observation_baseline_load_fault_reset_and_cleanup_are_deterministic]}
+  deterministic_reset: {implementation: testbeds/adapters/keda_rabbitmq.py, tests: [test_observation_baseline_load_fault_reset_and_cleanup_are_deterministic]}
+  specified_faults: {implementation: testbeds/adapters/keda_rabbitmq.py, tests: [test_observation_baseline_load_fault_reset_and_cleanup_are_deterministic]}
+  normalized_observation: {implementation: testbeds/adapters/keda_rabbitmq.py, tests: [test_observation_baseline_load_fault_reset_and_cleanup_are_deterministic]}
+  failure_diagnostics: {implementation: testbeds/adapters/keda_rabbitmq.py, tests: [test_observation_baseline_load_fault_reset_and_cleanup_are_deterministic]}
+  complete_cleanup: {implementation: testbeds/adapters/keda_rabbitmq.py, tests: [test_observation_baseline_load_fault_reset_and_cleanup_are_deterministic]}
+  production_separation: {implementation: testbeds/adapters/keda_rabbitmq.py, tests: [test_keda_rabbitmq_adapter_satisfies_environment_adapter_protocol]}
+  contract_and_smoke_tests: {implementation: tests/contract/test_keda_rabbitmq_adapter_contract.py, tests: [test_keda_rabbitmq_adapter_satisfies_environment_adapter_protocol, test_real_cluster_install_baseline_load_fault_reset_and_cleanup]}
