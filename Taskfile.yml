@@ -1,0 +1,114 @@
+version: "3"
+
+tasks:
+  bootstrap:
+    cmds:
+      - ./scripts/bootstrap.sh
+
+  format:
+    cmds:
+      - uv run ruff format .
+      - gofmt -w services
+      - npm run format
+
+  format:check:
+    cmds:
+      - uv run ruff format --check .
+      - test -z "$(gofmt -l services)"
+      - npm run format:check
+
+  lint:
+    cmds:
+      - uv run ruff check .
+      - golangci-lint run ./...
+      - npm run lint
+
+  lint:online-boutique:
+    desc: Lint the Online Boutique adapter and its focused tests
+    cmds:
+      - uv run ruff check testbeds/adapters/online_boutique.py testbeds/environments/online_boutique.py tests/unit/test_online_boutique_adapter.py tests/contract/test_online_boutique_adapter_contract.py
+
+  typecheck:
+    cmds:
+      - uv run pyright
+      - go test ./... -run '^$'
+      - npm run typecheck
+
+  test:unit:
+    cmds:
+      - uv run pytest tests/unit
+      - go test ./services/... ./packages/...
+      - npm run test:unit
+
+  test:contract:
+    cmds:
+      - uv run pytest tests/contract
+      - buf lint
+      - buf breaking --against '.git#branch=main'
+      - opa test policies
+
+  test:integration:
+    cmds:
+      - uv run pytest tests/integration
+
+  test:security:
+    cmds:
+      - uv run pytest tests/security
+      - govulncheck ./...
+      - npm audit --audit-level high
+
+  test:replay:
+    cmds:
+      - uv run pytest tests/replay
+
+  test:architecture:
+    desc: Enforce Guardian production architecture boundaries
+    cmds:
+      - uv run python -m unittest tests.architecture.test_boundaries -v
+
+  test:requirements:
+    desc: Test requirement-registry validation and rendering
+    cmds:
+      - uv run python -m unittest tests.requirements.test_registry -v
+
+  test:env:
+    requires:
+      vars: [ENV]
+    cmds:
+      - ./scripts/test-environment.sh "{{.ENV}}"
+
+  test:matrix:
+    cmds:
+      - task: test:env
+        vars: {ENV: otel-demo}
+      - task: test:env
+        vars: {ENV: aws-retail}
+      - task: test:env
+        vars: {ENV: online-boutique}
+      - task: test:env
+        vars: {ENV: argo-rollouts}
+      - task: test:env
+        vars: {ENV: keda-rabbitmq}
+
+  requirements:render:
+    desc: Regenerate requirement coverage and dependency graph
+    cmds:
+      - uv run python -m tools.requirements_registry render
+
+  requirements:check:
+    desc: Validate requirement traceability and generated artifacts
+    cmds:
+      - uv run python -m tools.requirements_registry check
+
+  final:
+    cmds:
+      - task: format:check
+      - task: lint
+      - task: typecheck
+      - task: test:unit
+      - task: test:contract
+      - task: test:integration
+      - task: test:security
+      - task: test:replay
+      - task: test:matrix
+      - task: requirements:check

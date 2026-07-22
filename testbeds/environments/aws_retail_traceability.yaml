@@ -1,0 +1,35 @@
+environment: aws-retail
+source_sections:
+  - 20.2 AWS Containers Retail Sample
+  - 21 Test environment adapter contract
+obligations:
+  immutable_release:
+    implementation: testbeds/environments/aws_retail.py
+    tests: [test_environment_pin_is_real_full_sha_and_immutable_package_digest, test_install_verifies_head_before_first_kubernetes_mutation]
+  namespace_isolation:
+    implementation: testbeds/adapters/aws_retail.py
+    tests: [test_namespace_is_sanitized_and_invalid_override_is_rejected]
+  healthy_baseline:
+    implementation: testbeds/adapters/aws_retail.py
+    tests: [test_baseline_requires_two_stable_ready_observations, test_baseline_timeout_collects_bounded_diagnostics]
+  deterministic_reset:
+    implementation: testbeds/adapters/aws_retail.py
+    tests: [test_supported_fault_apply_and_reset_restores_original_state, test_reset_restores_original_deployment_image]
+  specified_faults:
+    implementation: testbeds/adapters/aws_retail.py
+    tests: [test_capabilities_cover_only_normative_aws_retail_fault_controls, test_supported_fault_apply_and_reset_restores_original_state, test_database_saturation_selector_matches_only_pinned_chart_mysql_labels, test_service_latency_selector_excludes_checkout_redis]
+  normalized_observation:
+    implementation: testbeds/adapters/aws_retail.py
+    tests: [test_observe_state_normalizes_versions_workloads_and_health, test_normalized_health_is_degraded_while_chaos_fault_is_active]
+  failure_diagnostics:
+    implementation: testbeds/adapters/aws_retail.py
+    tests: [test_baseline_timeout_collects_bounded_diagnostics, test_reset_and_cleanup_are_idempotent_after_partial_fault_failure]
+  complete_cleanup:
+    implementation: testbeds/adapters/aws_retail.py
+    tests: [test_partially_failed_install_removes_namespace, test_reset_and_cleanup_are_idempotent_after_partial_fault_failure]
+  production_separation:
+    implementation: testbeds/adapters/aws_retail.py
+    tests: [test_production_sources_do_not_import_aws_retail_adapter]
+  contract_and_smoke_tests:
+    implementation: tests/contract/test_aws_retail_adapter_contract.py
+    tests: [test_aws_retail_adapter_satisfies_environment_adapter_protocol, test_real_cluster_install_baseline_fault_reset_and_cleanup, test_real_cluster_partial_failure_reset_and_cleanup]
