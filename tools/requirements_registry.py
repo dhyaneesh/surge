@@ -37,6 +37,8 @@ ENVIRONMENT_IDS = {
 }
 REQUIREMENT_ID = re.compile(r"^(?:GRD|AT)-[A-Z]+-\d{3}$")
 DESIGN_CAPABILITY_ID = re.compile(r"^DESIGN-[A-Z]+-\d{3}$")
+DESIGN_CAPABILITY_FIELDS = {"id", "source", "implementation", "tests", "status"}
+DESIGN_CAPABILITY_SOURCE_FIELDS = {"document", "section"}
 TEST_ID = re.compile(
     r"^TST-(?:GRD|AT)-[A-Z]+-\d{3}-(?:UNIT|CONTRACT|INTEGRATION|ACCEPTANCE|REPLAY|SECURITY)$"
 )
@@ -326,6 +328,13 @@ def validate_registry(registry: dict[str, Any]) -> list[ValidationIssue]:
         if not isinstance(capability, dict):
             _issue(issues, "invalid_schema", base, "must be an object")
             continue
+        for key in sorted(set(capability) - DESIGN_CAPABILITY_FIELDS):
+            _issue(
+                issues,
+                "unknown_design_capability_key",
+                f"{base}.{key}",
+                f"unsupported design capability field {key!r}",
+            )
         identifier = capability.get("id")
         if not isinstance(identifier, str) or not DESIGN_CAPABILITY_ID.fullmatch(
             identifier
@@ -337,6 +346,14 @@ def validate_registry(registry: dict[str, Any]) -> list[ValidationIssue]:
                 "design capability IDs must match DESIGN-<DOMAIN>-<NNN>",
             )
         source = capability.get("source")
+        if isinstance(source, dict):
+            for key in sorted(set(source) - DESIGN_CAPABILITY_SOURCE_FIELDS):
+                _issue(
+                    issues,
+                    "unknown_design_capability_source_key",
+                    f"{base}.source.{key}",
+                    f"unsupported design capability source field {key!r}",
+                )
         if (
             not isinstance(source, dict)
             or not isinstance(source.get("document"), str)
@@ -432,6 +449,35 @@ def validate_registry(registry: dict[str, Any]) -> list[ValidationIssue]:
                 path,
                 f"absolute, parent-relative, or machine-specific path {value!r}",
             )
+    return sorted(set(issues))
+
+
+def validate_design_capability_paths(
+    registry: dict[str, Any], repository_root: Path
+) -> list[ValidationIssue]:
+    """Validate repository paths claimed by implemented design capabilities."""
+
+    issues: list[ValidationIssue] = []
+    for index, capability in enumerate(registry.get("design_capabilities", [])):
+        if (
+            not isinstance(capability, dict)
+            or capability.get("status") != "implemented"
+        ):
+            continue
+        for field in ("implementation", "tests"):
+            paths = capability.get(field, [])
+            if not isinstance(paths, list):
+                continue
+            for path_index, value in enumerate(paths):
+                if not isinstance(value, str) or _invalid_repository_path(value):
+                    continue
+                if not (repository_root / value).exists():
+                    _issue(
+                        issues,
+                        "design_capability_path_missing",
+                        f"$.design_capabilities[{index}].{field}[{path_index}]",
+                        f"implemented capability path {value!r} does not exist",
+                    )
     return sorted(set(issues))
 
 
@@ -967,6 +1013,8 @@ def main(argv: list[str] | None = None) -> int:
     registry_path = Path(arguments.registry)
     registry = _load_yaml(registry_path)
     issues = validate_registry(registry)
+    issues.extend(validate_design_capability_paths(registry, Path.cwd()))
+    issues = sorted(set(issues))
     if arguments.command == "check":
         implementation_path = Path(arguments.implementation)
         if implementation_path.exists():

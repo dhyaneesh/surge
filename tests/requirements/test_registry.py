@@ -6,6 +6,7 @@ from pathlib import Path
 import yaml
 
 from tools.requirements_registry import (
+    main,
     render_coverage,
     render_dependency_graph,
     validate_traceability,
@@ -227,6 +228,48 @@ class RegistryValidationTests(unittest.TestCase):
         registry["design_capabilities"] = {"id": "DESIGN-SCENARIO-001"}
 
         self.assertIn("invalid_schema", issue_codes(registry))
+
+    def test_rejects_unknown_design_capability_and_source_keys(self) -> None:
+        registry = valid_registry()
+        registry["design_capabilities"].append(
+            {
+                "id": "DESIGN-SCENARIO-001",
+                "source": {
+                    "document": "docs/spec/guardian-production-v1.md",
+                    "section": "22",
+                    "sectoin": "typo",
+                },
+                "implementation": ["testbeds/scenarios/models.py"],
+                "tests": ["tests/unit/test_guardian_scenario_schema.py"],
+                "status": "implemented",
+                "statsu": "implemented",
+            }
+        )
+
+        self.assertIn("unknown_design_capability_key", issue_codes(registry))
+        self.assertIn("unknown_design_capability_source_key", issue_codes(registry))
+
+    def test_cli_rejects_missing_design_capability_paths(self) -> None:
+        registry = valid_registry()
+        registry["design_capabilities"].append(
+            {
+                "id": "DESIGN-HARNESS-001",
+                "source": {
+                    "document": "docs/design.md",
+                    "section": "Harness",
+                },
+                "implementation": ["tools/missing_harness.py"],
+                "tests": ["tests/unit/test_missing_harness.py"],
+                "status": "implemented",
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            registry_path = Path(directory) / "requirements.yaml"
+            registry_path.write_text(yaml.safe_dump(registry), encoding="utf-8")
+            result = main(["validate", str(registry_path)])
+
+        self.assertEqual(1, result)
 
     def test_renderers_are_deterministic_and_exclude_ambiguity_nodes(self) -> None:
         registry = valid_registry()
