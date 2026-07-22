@@ -5,11 +5,17 @@ platform:
   architecture: amd64
 
 host_prerequisites:
+  - bash
   - curl
-  - git
-  - python3
-  - sha256sum
   - tar
+
+sha256_utilities:
+  required: 1
+  any_of:
+    - command: sha256sum
+      arguments: []
+    - command: shasum
+      arguments: [-a, "256"]
 
 tools:
   task:
@@ -31,44 +37,44 @@ python_libraries:
   yaml: pyyaml
   yaml_typing: types-pyyaml
 
-# These executables are required by current or normative targets but are not
-# installed by the active Python bootstrap yet.
-baseline_gaps:
-  - bash
-  - buf
-  - go
-  - gofmt
-  - golangci-lint
-  - govulncheck
-  - kubectl
-  - npm
-  - opa
+# A baseline capability is tracked by the harness but is not yet implemented
+# and therefore must not be treated as an executable prerequisite.
+capabilities:
+  tooling: {status: active}
+  python: {status: active}
+  requirements: {status: active}
+  go: {status: baseline}
+  node: {status: baseline}
+  buf: {status: baseline}
+  policy: {status: baseline}
+  kubernetes: {status: baseline}
+  environment: {status: baseline}
 
 # Dependencies name executable prerequisites. Capabilities describe the checks
 # exposed by the task and are consumed by the verification harness.
 targets:
-  bootstrap: {dependencies: [curl, git, python3, sha256sum, tar], capabilities: [bootstrap]}
-  format: {dependencies: [uv, ruff, gofmt, npm], capabilities: [format]}
-  format:check: {dependencies: [uv, ruff, gofmt, npm], capabilities: [format-check]}
-  lint: {dependencies: [uv, ruff, golangci-lint, npm], capabilities: [lint]}
-  lint:online-boutique: {dependencies: [uv, ruff], capabilities: [python-lint, online-boutique]}
-  typecheck: {dependencies: [uv, pyright, go, npm], capabilities: [typecheck]}
-  test:unit: {dependencies: [uv, pytest, go, npm], capabilities: [unit-test]}
-  test:contract: {dependencies: [uv, pytest, buf, opa], capabilities: [contract-test]}
-  test:integration: {dependencies: [uv, pytest], capabilities: [integration-test]}
-  test:architecture: {dependencies: [uv, python3], capabilities: [architecture-test]}
-  test:testbeds-unit: {dependencies: [uv, pytest], capabilities: [testbed, unit-test]}
-  test:testbeds-contract: {dependencies: [uv, pytest], capabilities: [testbed, contract-test]}
-  test:policy: {dependencies: [opa], capabilities: [policy-test]}
-  test:replay: {dependencies: [uv, pytest], capabilities: [replay-test]}
-  test:replay-deterministic: {dependencies: [uv, pytest], capabilities: [deterministic-replay]}
-  test:security: {dependencies: [uv, pytest, govulncheck, npm], capabilities: [security-test]}
-  test:reasoner: {dependencies: [uv, pytest], capabilities: [reasoner-test]}
-  test:keda-scaler: {dependencies: [go], capabilities: [keda-scaler-test]}
-  test:action-controller: {dependencies: [go], capabilities: [action-controller-test]}
-  test:requirements: {dependencies: [uv, python3], capabilities: [requirements-test]}
-  test:env: {dependencies: [bash, kubectl], capabilities: [environment-test]}
-  test:matrix: {dependencies: [task], capabilities: [environment-matrix]}
-  requirements:render: {dependencies: [uv, python3], capabilities: [requirements-render]}
-  requirements:check: {dependencies: [uv, python3], capabilities: [requirements-check]}
-  final: {dependencies: [task], capabilities: [verification-final]}
+  bootstrap: {dependencies: [], capabilities: [tooling]}
+  format: {dependencies: [task, uv, ruff], capabilities: [python, go, node]}
+  format:check: {dependencies: [task, uv, ruff], capabilities: [python, go, node]}
+  lint: {dependencies: [task, uv, ruff], capabilities: [python, go, node]}
+  lint:online-boutique: {dependencies: [task, uv, ruff], capabilities: [python]}
+  typecheck: {dependencies: [task, uv, pyright], capabilities: [python, go, node]}
+  test:unit: {dependencies: [task, uv, pytest], capabilities: [python, go, node]}
+  test:contract: {dependencies: [task, uv, pytest], capabilities: [python, buf, policy]}
+  test:integration: {dependencies: [task, uv, pytest], capabilities: [python]}
+  test:architecture: {dependencies: [task, uv], capabilities: [python]}
+  test:testbeds-unit: {dependencies: [task, uv, pytest], capabilities: [python]}
+  test:testbeds-contract: {dependencies: [task, uv, pytest], capabilities: [python]}
+  test:policy: {dependencies: [task], capabilities: [policy]}
+  test:replay: {dependencies: [task, uv, pytest], capabilities: [python]}
+  test:replay-deterministic: {dependencies: [task, uv, pytest], capabilities: [python]}
+  test:security: {dependencies: [task, uv, pytest], capabilities: [python, go, node]}
+  test:reasoner: {dependencies: [task, uv, pytest], capabilities: [python]}
+  test:keda-scaler: {dependencies: [task], capabilities: [go]}
+  test:action-controller: {dependencies: [task], capabilities: [go]}
+  test:requirements: {dependencies: [task, uv], capabilities: [requirements]}
+  test:env: {dependencies: [task], capabilities: [environment, kubernetes]}
+  test:matrix: {dependencies: [task], capabilities: [environment, kubernetes]}
+  requirements:render: {dependencies: [task, uv], capabilities: [requirements]}
+  requirements:check: {dependencies: [task, uv], capabilities: [requirements]}
+  final: {dependencies: [task], capabilities: [tooling, python, requirements, go, node, buf, policy, kubernetes, environment]}

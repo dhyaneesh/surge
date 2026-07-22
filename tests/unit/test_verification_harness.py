@@ -104,7 +104,14 @@ def test_current_and_referenced_targets_are_represented_in_manifest() -> None:
 def test_manifest_pins_supported_platform_and_bootstrap_tools() -> None:
     manifest = load_yaml(MANIFEST_PATH)
     assert manifest["platform"] == {"os": "linux", "architecture": "amd64"}
-    assert set(manifest["host_prerequisites"]) >= {"curl", "tar", "sha256sum"}
+    assert manifest["host_prerequisites"] == ["bash", "curl", "tar"]
+    assert manifest["sha256_utilities"] == {
+        "required": 1,
+        "any_of": [
+            {"command": "sha256sum", "arguments": []},
+            {"command": "shasum", "arguments": ["-a", "256"]},
+        ],
+    }
     assert manifest["tools"] == {
         "task": {
             "version": "3.52.0",
@@ -122,16 +129,24 @@ def test_manifest_pins_supported_platform_and_bootstrap_tools() -> None:
 def test_manifest_targets_declare_dependencies_and_capabilities() -> None:
     manifest = load_yaml(MANIFEST_PATH)
     targets = manifest["targets"]
-    declared_dependencies = (
-        set(manifest["host_prerequisites"])
-        | set(manifest["tools"])
-        | set(manifest["python_commands"])
-        | set(manifest["baseline_gaps"])
-    )
+    active_dependencies = set(manifest["tools"]) | set(manifest["python_commands"])
+    capabilities = manifest["capabilities"]
     for name, target in targets.items():
         assert isinstance(target["dependencies"], list), name
         assert isinstance(target["capabilities"], list) and target["capabilities"], name
-        assert set(target["dependencies"]) <= declared_dependencies, name
+        assert set(target["dependencies"]) <= active_dependencies, name
+        assert set(target["capabilities"]) <= set(capabilities), name
+
+    assert {
+        name for name, value in capabilities.items() if value["status"] == "active"
+    } == {
+        "python",
+        "requirements",
+        "tooling",
+    }
+    assert {
+        name for name, value in capabilities.items() if value["status"] == "baseline"
+    } == {"buf", "environment", "go", "kubernetes", "node", "policy"}
 
 
 def test_tools_directory_is_ignored() -> None:
