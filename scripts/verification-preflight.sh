@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -eu
 
+operation="preflight"
+if [ "${1:-}" = "aggregate" ]; then
+  operation="aggregate"
+  shift
+fi
 target="${1:-}"
 if [ -z "$target" ]; then
   echo "[prerequisite] preflight: target is required" >&2
@@ -28,4 +33,4 @@ if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
 fi
 
 cd "$repo_root"
-exec "$uv" run --locked --no-sync python -m tools.verification_harness preflight "$target"
+exec "$uv" run --locked --no-sync python -m tools.verification_harness "$operation" "$target"

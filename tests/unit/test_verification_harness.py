@@ -257,7 +257,8 @@ if [ "${{1:-}}" = run ]; then
 fi""",
         )
     write_executable(
-        root / ".venv/bin/pytest", "[ \"${1:-}\" = --version ] && echo 'pytest 9.0.0'",
+        root / ".venv/bin/pytest",
+        "[ \"${1:-}\" = --version ] && echo 'pytest 9.0.0'",
     )
 
 
@@ -370,11 +371,75 @@ def test_taskfile_matrix_runs_aggregate_preflight_before_environment_children() 
     commands = load_yaml(ROOT / "Taskfile.yml")["tasks"]["test:matrix"]["cmds"]
 
     assert isinstance(commands[0], str)
-    assert "verification-preflight.sh aggregate test:matrix" in commands[0]
+    assert "{{.PREFLIGHT}} aggregate test:matrix" == commands[0]
     assert all(
         isinstance(command, dict) and command.get("task") == "test:env"
         for command in commands[1:]
     )
+    assert [command["vars"]["ENV"] for command in commands[1:]] == load_yaml(
+        MANIFEST_PATH
+    )["registered_environments"]
+
+
+def task_command_text(command: object) -> str:
+    if isinstance(command, str):
+        return command
+    if isinstance(command, dict):
+        return str(command.get("cmd", ""))
+    return ""
+
+
+def test_taskfile_uses_local_uv_and_preflights_before_work() -> None:
+    taskfile = load_yaml(ROOT / "Taskfile.yml")
+    assert taskfile["vars"] == {
+        "UV": "{{.ROOT_DIR}}/.tools/bin/uv",
+        "PREFLIGHT": "{{.ROOT_DIR}}/scripts/verification-preflight.sh",
+    }
+
+    for name, task in taskfile["tasks"].items():
+        if name == "bootstrap":
+            continue
+        commands = task["cmds"]
+        first = task_command_text(commands[0])
+        operation = "aggregate " if name in {"final", "test:matrix"} else ""
+        assert f"{{{{.PREFLIGHT}}}} {operation}{name}" in first, name
+        for command in commands:
+            text = task_command_text(command)
+            if re.search(r"\b(?:ruff|pyright|pytest|python)\b", text):
+                assert "{{.UV}} run --locked" in text, (name, text)
+
+
+def test_taskfile_does_not_invoke_tools_without_repository_manifests() -> None:
+    text = (ROOT / "Taskfile.yml").read_text(encoding="utf-8")
+    manifest_for = {
+        "go": "go.mod",
+        "gofmt": "go.mod",
+        "golangci-lint": "go.mod",
+        "govulncheck": "go.mod",
+        "npm": "package.json",
+        "buf": "buf.yaml",
+        "opa": "policies",
+    }
+    for executable, manifest in manifest_for.items():
+        if not (ROOT / manifest).exists():
+            assert re.search(rf"(?m)^\s*- .*\b{re.escape(executable)}\b", text) is None
+
+
+def test_format_requires_explicit_files_and_never_formats_the_repository() -> None:
+    task = load_yaml(ROOT / "Taskfile.yml")["tasks"]["format"]
+    assert task["requires"]["vars"] == ["FILES"]
+    command = "\n".join(task_command_text(item) for item in task["cmds"])
+    assert "ruff format {{.FILES}}" in command
+    assert "ruff format ." not in command
+
+
+def test_aggregate_children_match_manifest_and_follow_preflight() -> None:
+    taskfile = load_yaml(ROOT / "Taskfile.yml")["tasks"]
+    manifest = load_yaml(MANIFEST_PATH)["targets"]
+    for name in ("final", "test:matrix"):
+        commands = taskfile[name]["cmds"]
+        children = [command["task"] for command in commands[1:]]
+        assert children == manifest[name]["children"]
 
 
 def test_preflight_classifies_missing_local_uv_as_prerequisite(tmp_path: Path) -> None:
@@ -441,8 +506,9 @@ esac""",
     )
 
     assert result.returncode == 0, result.stderr
-    assert "run --locked --no-sync python -m tools.verification_harness preflight check" in (
-        log.read_text(encoding="utf-8")
+    assert (
+        "run --locked --no-sync python -m tools.verification_harness preflight check"
+        in (log.read_text(encoding="utf-8"))
     )
     assert not sentinel.exists()
 
@@ -470,7 +536,9 @@ def test_suite_classifies_a_non_test_file_as_baseline(tmp_path: Path) -> None:
     assert "[baseline] check: no tests are configured" in result.stderr
 
 
-def test_aggregate_preflight_checks_union_and_never_runs_children(tmp_path: Path) -> None:
+def test_aggregate_preflight_checks_union_and_never_runs_children(
+    tmp_path: Path,
+) -> None:
     write_harness_repo(tmp_path, uv_version=None, children=["check"])
     sentinel = tmp_path / "child-ran"
     (tmp_path / "Taskfile.yml").write_text(
@@ -485,7 +553,9 @@ def test_aggregate_preflight_checks_union_and_never_runs_children(tmp_path: Path
     assert not sentinel.exists()
 
 
-def test_aggregate_reports_child_baseline_without_running_children(tmp_path: Path) -> None:
+def test_aggregate_reports_child_baseline_without_running_children(
+    tmp_path: Path,
+) -> None:
     write_harness_repo(tmp_path, capability="baseline", children=["check"])
 
     result = run_harness(tmp_path, "aggregate", "aggregate")
@@ -539,6 +609,11 @@ def test_manifest_check_requires_commands_to_be_covered(tmp_path: Path) -> None:
 
     result = run_harness(tmp_path, "manifest-check")
 
+    assert result.returncode == 0, result.stderr
+
+
+def test_repository_taskfile_commands_are_covered_by_manifest() -> None:
+    result = run_harness(ROOT, "manifest-check")
     assert result.returncode == 0, result.stderr
 
 

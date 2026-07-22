@@ -121,7 +121,11 @@ def capability_status(data: dict[str, Any], target: str) -> int:
     for name in config.get("capabilities", []):
         capability = capabilities.get(name, {})
         if capability.get("availability") == "baseline":
-            fail("baseline", target, str(capability.get("reason", "capability unavailable")))
+            fail(
+                "baseline",
+                target,
+                str(capability.get("reason", "capability unavailable")),
+            )
             return BASELINE_EXIT
     return 0
 
@@ -219,7 +223,8 @@ def command_dependencies(command: str) -> set[str]:
     first = Path(words[0]).name
     dependencies = (
         {first}
-        if first not in {"python", "touch", "test"} and not words[0].startswith("./")
+        if first not in {"python", "touch", "test", "verification-preflight.sh"}
+        and not words[0].startswith("./")
         else set()
     )
     if first == "uv" and "run" in words:
@@ -246,6 +251,15 @@ def manifest_check(root: Path, data: dict[str, Any]) -> int:
         return MANIFEST_EXIT
     errors: list[str] = []
     known = set(data.get("tools", {})) | set(data.get("python_commands", {}))
+    raw_variables = taskfile.get("vars", {})
+    variables = (
+        {
+            str(name): str(value).replace("{{.ROOT_DIR}}", str(root))
+            for name, value in raw_variables.items()
+        }
+        if isinstance(raw_variables, dict)
+        else {}
+    )
     for name, task in tasks.items():
         config = target_config(data, str(name))
         if config is None:
@@ -259,17 +273,24 @@ def manifest_check(root: Path, data: dict[str, Any]) -> int:
         used: set[str] = set()
         for command in commands:
             if isinstance(command, str):
-                used |= command_dependencies(command)
+                expanded = command
+                for variable, value in variables.items():
+                    expanded = expanded.replace(f"{{{{.{variable}}}}}", value)
+                used |= command_dependencies(expanded)
         missing = used - declared
         unknown = used - known
         if missing:
             errors.append(f"Task target {name} omits dependencies: {sorted(missing)}")
         if unknown:
-            errors.append(f"Task target {name} uses undeclared commands: {sorted(unknown)}")
+            errors.append(
+                f"Task target {name} uses undeclared commands: {sorted(unknown)}"
+            )
     for name, config in targets.items():
         if name not in tasks:
             errors.append(f"manifest target {name} has no Task command")
-        if not isinstance(config, dict) or not isinstance(config.get("dependencies"), list):
+        if not isinstance(config, dict) or not isinstance(
+            config.get("dependencies"), list
+        ):
             errors.append(f"manifest target {name} has no dependencies")
     for error in errors:
         fail("prerequisite", "manifest-check", error)

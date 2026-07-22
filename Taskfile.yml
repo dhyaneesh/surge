@@ -1,84 +1,121 @@
 version: "3"
 
+vars:
+  UV: "{{.ROOT_DIR}}/.tools/bin/uv"
+  PREFLIGHT: "{{.ROOT_DIR}}/scripts/verification-preflight.sh"
+
 tasks:
   bootstrap:
     cmds:
       - ./scripts/bootstrap.sh
 
   format:
+    requires:
+      vars: [FILES]
     cmds:
-      - uv run ruff format .
-      - gofmt -w services
-      - npm run format
+      - "{{.PREFLIGHT}} format"
+      - "{{.UV}} run --locked ruff format {{.FILES}}"
 
   format:check:
     cmds:
-      - uv run ruff format --check .
-      - test -z "$(gofmt -l services)"
-      - npm run format:check
+      - "{{.PREFLIGHT}} format:check"
+      - "{{.UV}} run --locked ruff format --check ."
 
   lint:
     cmds:
-      - uv run ruff check .
-      - golangci-lint run ./...
-      - npm run lint
+      - "{{.PREFLIGHT}} lint"
+      - "{{.UV}} run --locked ruff check ."
 
   lint:online-boutique:
     desc: Lint the Online Boutique adapter and its focused tests
     cmds:
-      - uv run ruff check testbeds/adapters/online_boutique.py testbeds/environments/online_boutique.py tests/unit/test_online_boutique_adapter.py tests/contract/test_online_boutique_adapter_contract.py
+      - "{{.PREFLIGHT}} lint:online-boutique"
+      - "{{.UV}} run --locked ruff check testbeds/adapters/online_boutique.py testbeds/environments/online_boutique.py tests/unit/test_online_boutique_adapter.py tests/contract/test_online_boutique_adapter_contract.py"
 
   typecheck:
     cmds:
-      - uv run pyright
-      - go test ./... -run '^$'
-      - npm run typecheck
+      - "{{.PREFLIGHT}} typecheck"
+      - "{{.UV}} run --locked pyright"
 
   test:unit:
     cmds:
-      - uv run pytest tests/unit
-      - go test ./services/... ./packages/...
-      - npm run test:unit
+      - "{{.PREFLIGHT}} test:unit"
+      - "{{.UV}} run --locked --no-sync python -m tools.verification_harness suite test:unit tests/unit"
+      - "{{.UV}} run --locked pytest tests/unit"
 
   test:contract:
     cmds:
-      - uv run pytest tests/contract
-      - buf lint
-      - buf breaking --against '.git#branch=main'
-      - opa test policies
+      - "{{.PREFLIGHT}} test:contract"
+      - "{{.UV}} run --locked --no-sync python -m tools.verification_harness suite test:contract tests/contract"
+      - "{{.UV}} run --locked pytest tests/contract"
 
   test:integration:
     cmds:
-      - uv run pytest tests/integration
-
-  test:security:
-    cmds:
-      - uv run pytest tests/security
-      - govulncheck ./...
-      - npm audit --audit-level high
-
-  test:replay:
-    cmds:
-      - uv run pytest tests/replay
+      - "{{.PREFLIGHT}} test:integration"
 
   test:architecture:
     desc: Enforce Guardian production architecture boundaries
     cmds:
-      - uv run python -m unittest tests.architecture.test_boundaries -v
+      - "{{.PREFLIGHT}} test:architecture"
+      - "{{.UV}} run --locked --no-sync python -m tools.verification_harness suite test:architecture tests/architecture"
+      - "{{.UV}} run --locked pytest tests/architecture"
+
+  test:testbeds-unit:
+    cmds:
+      - "{{.PREFLIGHT}} test:testbeds-unit"
+      - "{{.UV}} run --locked --no-sync python -m tools.verification_harness suite test:testbeds-unit tests/unit/test_otel_demo_adapter.py tests/unit/test_aws_retail_adapter.py tests/unit/test_online_boutique_adapter.py tests/unit/test_argo_rollouts_adapter.py tests/unit/test_keda_rabbitmq_adapter.py tests/unit/test_environment_adapter_contract.py tests/unit/test_guardian_scenario_schema.py"
+      - "{{.UV}} run --locked pytest tests/unit/test_otel_demo_adapter.py tests/unit/test_aws_retail_adapter.py tests/unit/test_online_boutique_adapter.py tests/unit/test_argo_rollouts_adapter.py tests/unit/test_keda_rabbitmq_adapter.py tests/unit/test_environment_adapter_contract.py tests/unit/test_guardian_scenario_schema.py"
+
+  test:testbeds-contract:
+    cmds:
+      - "{{.PREFLIGHT}} test:testbeds-contract"
+      - "{{.UV}} run --locked --no-sync python -m tools.verification_harness suite test:testbeds-contract tests/contract/test_otel_demo_adapter_contract.py tests/contract/test_aws_retail_adapter_contract.py tests/contract/test_online_boutique_adapter_contract.py tests/contract/test_argo_rollouts_adapter_contract.py tests/contract/test_keda_rabbitmq_adapter_contract.py"
+      - "{{.UV}} run --locked pytest tests/contract/test_otel_demo_adapter_contract.py tests/contract/test_aws_retail_adapter_contract.py tests/contract/test_online_boutique_adapter_contract.py tests/contract/test_argo_rollouts_adapter_contract.py tests/contract/test_keda_rabbitmq_adapter_contract.py"
+
+  test:policy:
+    cmds:
+      - "{{.PREFLIGHT}} test:policy"
+
+  test:replay:
+    cmds:
+      - "{{.PREFLIGHT}} test:replay"
+
+  test:replay-deterministic:
+    cmds:
+      - "{{.PREFLIGHT}} test:replay-deterministic"
+
+  test:security:
+    cmds:
+      - "{{.PREFLIGHT}} test:security"
+
+  test:reasoner:
+    cmds:
+      - "{{.PREFLIGHT}} test:reasoner"
+
+  test:keda-scaler:
+    cmds:
+      - "{{.PREFLIGHT}} test:keda-scaler"
+
+  test:action-controller:
+    cmds:
+      - "{{.PREFLIGHT}} test:action-controller"
 
   test:requirements:
     desc: Test requirement-registry validation and rendering
     cmds:
-      - uv run python -m unittest tests.requirements.test_registry -v
+      - "{{.PREFLIGHT}} test:requirements"
+      - "{{.UV}} run --locked python -m unittest tests.requirements.test_registry -v"
 
   test:env:
     requires:
       vars: [ENV]
     cmds:
+      - "{{.PREFLIGHT}} test:env"
       - ./scripts/test-environment.sh "{{.ENV}}"
 
   test:matrix:
     cmds:
+      - "{{.PREFLIGHT}} aggregate test:matrix"
       - task: test:env
         vars: {ENV: otel-demo}
       - task: test:env
@@ -93,15 +130,18 @@ tasks:
   requirements:render:
     desc: Regenerate requirement coverage and dependency graph
     cmds:
-      - uv run python -m tools.requirements_registry render
+      - "{{.PREFLIGHT}} requirements:render"
+      - "{{.UV}} run --locked python -m tools.requirements_registry render"
 
   requirements:check:
     desc: Validate requirement traceability and generated artifacts
     cmds:
-      - uv run python -m tools.requirements_registry check
+      - "{{.PREFLIGHT}} requirements:check"
+      - "{{.UV}} run --locked python -m tools.requirements_registry check"
 
   final:
     cmds:
+      - "{{.PREFLIGHT}} aggregate final"
       - task: format:check
       - task: lint
       - task: typecheck
