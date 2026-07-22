@@ -201,6 +201,7 @@ def write_harness_repo(
     *,
     uv_version: str | None = "0.11.31",
     capability: str = "active",
+    aggregate_capability: str = "active",
     children: list[str] | None = None,
 ) -> None:
     tools = root / "tools"
@@ -218,7 +219,7 @@ python_commands:
 python_libraries: {{}}
 capabilities:
   check: {{availability: {capability}, reason: no tests are configured}}
-  aggregate: {{availability: active}}
+  aggregate: {{availability: {aggregate_capability}, reason: no tests are configured}}
 targets:
   check:
     dependencies: [uv, pytest]
@@ -265,6 +266,75 @@ def run_harness(root: Path, *arguments: str) -> subprocess.CompletedProcess[str]
         capture_output=True,
         text=True,
     )
+
+
+def run_environment(*arguments: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(ROOT / "scripts/test-environment.sh"), *arguments],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_environment_guard_accepts_only_registered_environment_ids() -> None:
+    registered = (
+        "otel-demo",
+        "aws-retail",
+        "online-boutique",
+        "argo-rollouts",
+        "keda-rabbitmq",
+    )
+
+    for environment in registered:
+        result = run_environment(environment)
+        assert result.returncode == 3
+        assert result.stdout == ""
+        assert result.stderr == (
+            f"[baseline] test:env: no tests are configured ({environment})\n"
+        )
+
+
+def test_environment_guard_rejects_missing_unknown_and_extra_arguments() -> None:
+    for arguments in ((), ("unknown",), ("otel-demo", "extra")):
+        result = run_environment(*arguments)
+        assert result.returncode == 64
+        assert result.stdout == ""
+        assert result.stderr.startswith("[usage] test:env:")
+
+
+def test_matrix_baseline_preflight_does_not_run_environment_script(
+    tmp_path: Path,
+) -> None:
+    write_harness_repo(
+        tmp_path, aggregate_capability="baseline", children=["check"]
+    )
+    sentinel = tmp_path / "environment-script-ran"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            '"$1" -m tools.verification_harness aggregate aggregate && touch "$2"',
+            "matrix-test",
+            sys.executable,
+            str(sentinel),
+        ],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "VERIFICATION_REPO_ROOT": str(tmp_path),
+            "PYTHONPATH": str(ROOT),
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 3
+    assert "[baseline] aggregate: no tests are configured" in result.stderr
+    assert not sentinel.exists()
 
 
 def test_preflight_classifies_missing_local_uv_as_prerequisite(tmp_path: Path) -> None:
