@@ -1,0 +1,35 @@
+environment: online-boutique
+source_sections:
+  - 20.3 Online Boutique
+  - 21 Test environment adapter contract
+obligations:
+  immutable_release:
+    implementation: testbeds/environments/online_boutique.py
+    tests: [test_release_and_every_image_are_immutable]
+  namespace_isolation:
+    implementation: testbeds/adapters/online_boutique.py
+    tests: [test_namespace_is_dedicated_sanitized_and_validated]
+  healthy_baseline:
+    implementation: testbeds/adapters/online_boutique.py
+    tests: [test_baseline_requires_two_consecutive_healthy_observations]
+  deterministic_reset:
+    implementation: testbeds/adapters/online_boutique.py
+    tests: [test_faults_are_targeted_and_reset_restores_state, test_apply_load_scales_pinned_upstream_generator_and_reset_restores_it]
+  specified_faults:
+    implementation: testbeds/adapters/online_boutique.py
+    tests: [test_faults_are_targeted_and_reset_restores_state]
+  normalized_observation:
+    implementation: testbeds/adapters/online_boutique.py
+    tests: [test_observe_state_normalizes_roles_versions_digests_and_health]
+  failure_diagnostics:
+    implementation: testbeds/adapters/online_boutique.py
+    tests: [test_failure_collects_redacted_diagnostics_and_cleanup_is_idempotent]
+  complete_cleanup:
+    implementation: testbeds/adapters/online_boutique.py
+    tests: [test_failure_collects_redacted_diagnostics_and_cleanup_is_idempotent]
+  production_separation:
+    implementation: testbeds/adapters/online_boutique.py
+    tests: [test_online_boutique_adapter_satisfies_protocol]
+  contract_and_smoke_tests:
+    implementation: tests/contract/test_online_boutique_adapter_contract.py
+    tests: [test_online_boutique_adapter_satisfies_protocol, test_real_cluster_install_baseline_fault_reset_and_cleanup]
