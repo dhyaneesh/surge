@@ -26,7 +26,11 @@ if [ ! -x "$uv" ]; then
 fi
 
 expected="$(sed -n '/^  uv:$/ {n; s/^    version: *//p;}' "$manifest")"
-actual="$($uv --version 2>/dev/null | sed -n 's/^uv v*\([0-9][0-9.]*\).*$/\1/p')"
+if ! raw_actual="$($uv --version 2>/dev/null)"; then
+  echo "[prerequisite] $target: uv version unknown does not match ${expected:-unknown}" >&2
+  exit 2
+fi
+actual="$(printf '%s\n' "$raw_actual" | sed -n 's/^uv v*\([0-9][0-9.]*\).*$/\1/p')"
 if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
   echo "[prerequisite] $target: uv version ${actual:-unknown} does not match ${expected:-unknown}" >&2
   exit 2

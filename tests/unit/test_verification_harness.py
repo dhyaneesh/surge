@@ -573,6 +573,34 @@ def test_shell_preflight_rejects_wrong_uv_before_python_child(tmp_path: Path) ->
     assert not sentinel.exists()
 
 
+def test_shell_preflight_rejects_failing_uv_version_before_python_child(
+    tmp_path: Path,
+) -> None:
+    write_harness_repo(tmp_path)
+    sentinel = tmp_path / "python-child-ran"
+    write_executable(
+        tmp_path / ".tools/bin/uv",
+        f"""if [ "${{1:-}}" = --version ]; then echo 'uv 0.11.31'; exit 7; fi
+touch {sentinel}
+""",
+    )
+    env = os.environ.copy()
+    env["VERIFICATION_REPO_ROOT"] = str(tmp_path)
+
+    result = subprocess.run(
+        [str(ROOT / "scripts/verification-preflight.sh"), "check"],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "[prerequisite] check: uv version" in result.stderr
+    assert not sentinel.exists()
+
+
 def test_shell_preflight_invokes_python_without_syncing(tmp_path: Path) -> None:
     write_harness_repo(tmp_path)
     log = tmp_path / "uv.log"
