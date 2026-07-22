@@ -83,7 +83,9 @@ trap cleanup EXIT HUP INT TERM
 reported_version() {
   local tool="$1" executable="$2"
   "$executable" --version 2>/dev/null | sed -n \
-    's/.*[^0-9]\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | sed -n '1p'
+    -e 's/^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' \
+    -e 's/.*[^0-9]\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | \
+    sed -n '1p'
 }
 
 stage_tool() {

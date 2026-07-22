@@ -167,7 +167,7 @@ def test_uses_shasum_fallback_with_required_arguments(
         "#!/bin/sh\n"
         "[ \"$1 $2\" = '-a 256' ] || exit 9\n"
         "shift 2\n"
-        "exec /usr/bin/sha256sum \"$@\"\n",
+        'exec /usr/bin/sha256sum "$@"\n',
     )
     result = run(bootstrap_repo)
     assert result.returncode == 0, result.stderr
@@ -265,10 +265,36 @@ def test_installs_pinned_tools_runs_sync_and_preflight(
     log = bootstrap_repo["log"].read_text()  # type: ignore[union-attr]
     assert "uv sync --locked" in log
     assert (
-        "uv run --locked --no-sync python -m tools.verification_harness "
-        "manifest-check"
+        "uv run --locked --no-sync python -m tools.verification_harness manifest-check"
     ) in log
     assert ".tools/bin/task <target>" in result.stdout
+
+
+def test_accepts_plain_semantic_version_output_from_pinned_tool(
+    bootstrap_repo: dict[str, Path | dict[str, str]],
+) -> None:
+    artifacts = bootstrap_repo["artifacts"]
+    repo = bootstrap_repo["repo"]
+    assert isinstance(artifacts, Path)
+    assert isinstance(repo, Path)
+    replacement_sha = archive(
+        artifacts / "task.tar.gz",
+        "task",
+        "#!/bin/sh\n[ \"${1:-}\" = --version ] && echo '3.52.0'\n",
+    )
+    manifest = repo / "tools/verification-tools.yaml"
+    manifest.write_text(
+        re.sub(
+            r"(task:\n(?:    .*\n){2}    sha256: )[0-9a-f]+",
+            lambda match: match.group(1) + replacement_sha,
+            manifest.read_text(),
+        ),
+        encoding="utf-8",
+    )
+
+    result = run(bootstrap_repo)
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_matching_tools_are_reused_and_wrong_versions_replaced(
