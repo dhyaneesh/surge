@@ -23,6 +23,11 @@ tasks:
       - golangci-lint run ./...
       - npm run lint
 
+  lint:online-boutique:
+    desc: Lint the Online Boutique adapter and its focused tests
+    cmds:
+      - uv run ruff check testbeds/adapters/online_boutique.py testbeds/environments/online_boutique.py tests/unit/test_online_boutique_adapter.py tests/contract/test_online_boutique_adapter_contract.py
+
   typecheck:
     cmds:
       - uv run pyright
