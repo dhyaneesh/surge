@@ -188,6 +188,32 @@ def test_tools_directory_is_ignored() -> None:
     assert ".tools/" in patterns
 
 
+def test_readme_documents_the_fresh_checkout_verification_contract() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "./scripts/bootstrap.sh\n.tools/bin/task <target>" in readme
+    assert "Linux/WSL `amd64`" in readme
+    assert "repository-local pinned" in readme
+    assert "`[prerequisite]`" in readme
+    assert "`[baseline]`" in readme
+    assert "docs/verification-baseline.md" in readme
+
+
+def test_baseline_document_covers_every_target_and_no_green_rule() -> None:
+    baseline = (ROOT / "docs/verification-baseline.md").read_text(encoding="utf-8")
+    taskfile_targets = set(load_yaml(ROOT / "Taskfile.yml")["tasks"])
+
+    assert taskfile_targets == MANDATORY_TARGETS
+    for target in taskfile_targets:
+        assert f"`{target}`" in baseline, target
+    assert "must not be called green" in baseline
+    assert "fail; they do not pass or skip" in baseline
+    assert "Harness and toolchain status" in baseline
+    assert "Source, suite, and traceability status" in baseline
+    assert "exact command" in baseline.casefold()
+    assert "exit status" in baseline.casefold()
+
+
 def test_manifest_python_commands_have_explicit_dev_dependencies() -> None:
     manifest = load_yaml(MANIFEST_PATH)
     packages = set(manifest["python_commands"].values())
