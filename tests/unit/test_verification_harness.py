@@ -726,3 +726,45 @@ def test_manifest_check_rejects_chained_commands_instead_of_partial_inspection(
     assert (
         "Task target check uses unsupported shell control operator: &&" in result.stderr
     )
+
+
+def test_manifest_check_rejects_quoted_command_and_process_substitution(
+    tmp_path: Path,
+) -> None:
+    for index, (command, operator) in enumerate(
+        (
+            ('pytest "$(mystery-checker)"', "$("),
+            ('pytest "<(mystery-checker)"', "<("),
+            ('pytest ">(mystery-checker)"', ">("),
+        )
+    ):
+        root = tmp_path / str(index)
+        write_harness_repo(root)
+        taskfile = root / "Taskfile.yml"
+        data = load_yaml(taskfile)
+        data["tasks"]["check"]["cmds"] = [command]
+        taskfile.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+        result = run_harness(root, "manifest-check")
+
+        assert result.returncode == 4
+        assert (
+            f"Task target check uses unsupported shell substitution: {operator}"
+            in result.stderr
+        )
+
+
+def test_manifest_check_allows_non_executable_parameter_expansion(
+    tmp_path: Path,
+) -> None:
+    write_harness_repo(tmp_path)
+    taskfile = tmp_path / "Taskfile.yml"
+    data = load_yaml(taskfile)
+    data["tasks"]["check"]["cmds"] = [
+        '.tools/bin/uv run --locked pytest "${TEST_PATH}"'
+    ]
+    taskfile.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    result = run_harness(tmp_path, "manifest-check")
+
+    assert result.returncode == 0, result.stderr

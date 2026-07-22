@@ -216,6 +216,9 @@ def suite(root: Path, data: dict[str, Any], target: str, paths: list[str]) -> in
 def command_dependencies(command: str) -> set[str]:
     if "\n" in command or "\r" in command:
         raise ValueError("uses unsupported multiline shell command")
+    for substitution in ("$(", "<(", ">("):
+        if substitution in command:
+            raise ValueError(f"uses unsupported shell substitution: {substitution}")
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&")
         lexer.whitespace_split = True
