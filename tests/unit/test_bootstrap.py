@@ -80,9 +80,6 @@ tools:
 """,
         encoding="utf-8",
     )
-    preflight = repo / "scripts/verification-preflight.sh"
-    executable(preflight, f"#!/bin/sh\nprintf 'preflight %s\\n' \"$*\" >> {log}\n")
-
     required_commands = {
         "bash": Path("/bin/bash"),
         "curl": Path("/usr/bin/curl"),
@@ -160,6 +157,23 @@ def test_reports_each_missing_host_prerequisite_before_download(
     assert not (bootstrap_repo["repo"] / ".tools").exists()  # type: ignore[operator]
 
 
+def test_uses_shasum_fallback_with_required_arguments(
+    bootstrap_repo: dict[str, Path | dict[str, str]],
+) -> None:
+    host_bin = bootstrap_repo["host_bin"]
+    assert isinstance(host_bin, Path)
+    (host_bin / "sha256sum").unlink()
+    executable(
+        host_bin / "shasum",
+        "#!/bin/sh\n"
+        "[ \"$1 $2\" = '-a 256' ] || exit 9\n"
+        "shift 2\n"
+        "exec /usr/bin/sha256sum \"$@\"\n",
+    )
+    result = run(bootstrap_repo)
+    assert result.returncode == 0, result.stderr
+
+
 def test_checksum_mismatch_leaves_no_executable(
     bootstrap_repo: dict[str, Path | dict[str, str]],
 ) -> None:
@@ -180,6 +194,66 @@ def test_checksum_mismatch_leaves_no_executable(
     assert not (repo / ".tools/bin/task").exists()
 
 
+@pytest.mark.parametrize("failure", ["checksum", "archive", "version"])
+def test_second_artifact_failure_leaves_no_partial_toolchain(
+    bootstrap_repo: dict[str, Path | dict[str, str]], failure: str
+) -> None:
+    repo = bootstrap_repo["repo"]
+    assert isinstance(repo, Path)
+    manifest = repo / "tools/verification-tools.yaml"
+    artifacts = bootstrap_repo["artifacts"]
+    assert isinstance(artifacts, Path)
+    uv_archive = artifacts / "uv.tar.gz"
+    if failure == "archive":
+        uv_archive.write_bytes(b"not a tar archive")
+        replacement_sha = hashlib.sha256(uv_archive.read_bytes()).hexdigest()
+    elif failure == "version":
+        replacement_sha = archive(
+            uv_archive,
+            "uv-x86_64-unknown-linux-gnu/uv",
+            "#!/bin/sh\necho 'uv 0.0.1'\n",
+        )
+    else:
+        replacement_sha = "f" * 64
+    manifest.write_text(
+        re.sub(
+            r"(uv:\n(?:    .*\n){2}    sha256: )[0-9a-f]+",
+            lambda match: match.group(1) + replacement_sha,
+            manifest.read_text(),
+        ),
+        encoding="utf-8",
+    )
+    result = run(bootstrap_repo)
+    assert result.returncode != 0
+    assert "[prerequisite]" in result.stderr
+    assert not (repo / ".tools/bin/task").exists()
+    assert not (repo / ".tools/bin/uv").exists()
+
+
+def test_second_artifact_failure_preserves_existing_valid_tool(
+    bootstrap_repo: dict[str, Path | dict[str, str]],
+) -> None:
+    repo = bootstrap_repo["repo"]
+    assert isinstance(repo, Path)
+    task = repo / ".tools/bin/task"
+    task.parent.mkdir(parents=True)
+    executable(task, "#!/bin/sh\necho 'Task version: v3.52.0'\n")
+    original = task.read_bytes()
+    manifest = repo / "tools/verification-tools.yaml"
+    manifest.write_text(
+        re.sub(
+            r"(uv:\n(?:    .*\n){2}    sha256: )[0-9a-f]+",
+            r"\1" + "f" * 64,
+            manifest.read_text(),
+        ),
+        encoding="utf-8",
+    )
+
+    assert run(bootstrap_repo).returncode != 0
+    assert task.read_bytes() == original
+    assert not (repo / ".tools/bin/uv").exists()
+
+
 def test_installs_pinned_tools_runs_sync_and_preflight(
     bootstrap_repo: dict[str, Path | dict[str, str]],
 ) -> None:
@@ -191,7 +265,10 @@ def test_installs_pinned_tools_runs_sync_and_preflight(
     assert (repo / ".tools/bin/uv").stat().st_mode & 0o111
     log = bootstrap_repo["log"].read_text()  # type: ignore[union-attr]
     assert "uv sync --locked" in log
-    assert "preflight manifest-check" in log
+    assert (
+        "uv run --locked --no-sync python -m tools.verification_harness "
+        "manifest-check"
+    ) in log
     assert ".tools/bin/task <target>" in result.stdout
 
 

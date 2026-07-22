@@ -86,12 +86,13 @@ reported_version() {
     's/.*[^0-9]\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | sed -n '1p'
 }
 
-install_tool() {
+stage_tool() {
   local tool="$1" expected_version="$2" url="$3" expected_checksum="$4"
   local final="$tools_dir/bin/$tool" archive="$temp_dir/$tool.tar.gz"
   local extracted="$temp_dir/$tool-extracted" candidate member actual_checksum source_url
 
   if [[ -x "$final" && "$(reported_version "$tool" "$final")" == "$expected_version" ]]; then
+    printf -v "${tool}_staged" '%s' ''
     return
   fi
 
@@ -120,14 +121,24 @@ install_tool() {
   chmod 0755 "$candidate"
   [[ "$(reported_version "$tool" "$candidate")" == "$expected_version" ]] || \
     fail "$tool archive version does not match $expected_version"
-  mv -f -- "$candidate" "$final"
+  printf -v "${tool}_staged" '%s' "$candidate"
 }
 
-install_tool task "$task_version" "$task_url" "$task_checksum"
-install_tool uv "$uv_version" "$uv_url" "$uv_checksum"
+stage_tool task "$task_version" "$task_url" "$task_checksum"
+stage_tool uv "$uv_version" "$uv_url" "$uv_checksum"
+
+# Do not change either final executable until every required artifact has
+# passed checksum, extraction, and version verification.
+for tool in task uv; do
+  staged_variable="${tool}_staged"
+  staged="${!staged_variable}"
+  if [[ -n "$staged" ]]; then
+    mv -f -- "$staged" "$tools_dir/bin/$tool"
+  fi
+done
 
 cd "$repo_root"
 "$tools_dir/bin/uv" sync --locked
-VERIFICATION_REPO_ROOT="$repo_root" "$repo_root/scripts/verification-preflight.sh" manifest-check
+"$tools_dir/bin/uv" run --locked --no-sync python -m tools.verification_harness manifest-check
 printf '%s\n' 'Bootstrap complete. Run verification with:'
 printf '%s\n' '.tools/bin/task <target>'
