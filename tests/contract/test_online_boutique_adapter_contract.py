@@ -17,6 +17,7 @@ def test_online_boutique_adapter_satisfies_protocol(tmp_path):
         assert inspect.iscoroutinefunction(getattr(adapter, operation))
 
 
+@pytest.mark.smoke
 @pytest.mark.skipif(
     os.getenv("GUARDIAN_ONLINE_BOUTIQUE_SMOKE") != "1",
     reason="set GUARDIAN_ONLINE_BOUTIQUE_SMOKE=1 for a disposable cluster with Chaos Mesh",

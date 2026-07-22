@@ -48,6 +48,7 @@ def test_capabilities_cover_only_normative_aws_retail_fault_controls(tmp_path):
     assert adapter.capabilities.version_deployment
 
 
+@pytest.mark.smoke
 @pytest.mark.skipif(
     os.getenv("GUARDIAN_AWS_RETAIL_SMOKE") != "1",
     reason="set GUARDIAN_AWS_RETAIL_SMOKE=1 for a cluster with Chaos Mesh",
@@ -205,6 +206,7 @@ def test_real_cluster_install_baseline_fault_reset_and_cleanup(tmp_path):
     asyncio.run(scenario())
 
 
+@pytest.mark.smoke
 @pytest.mark.skipif(
     os.getenv("GUARDIAN_AWS_RETAIL_SMOKE") != "1",
     reason="set GUARDIAN_AWS_RETAIL_SMOKE=1 for a cluster with Chaos Mesh",

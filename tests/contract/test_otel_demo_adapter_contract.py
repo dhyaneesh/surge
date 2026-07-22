@@ -44,6 +44,7 @@ def test_capabilities_cover_specified_otel_demo_fault_classes(tmp_path):
     assert adapter.capabilities.adjustable_load
 
 
+@pytest.mark.smoke
 @pytest.mark.skipif(
     os.getenv("GUARDIAN_OTEL_DEMO_SMOKE") != "1",
     reason="set GUARDIAN_OTEL_DEMO_SMOKE=1 for a real cluster smoke test",
