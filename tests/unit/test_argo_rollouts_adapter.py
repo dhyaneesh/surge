@@ -4,7 +4,7 @@ from datetime import timedelta
 
 import pytest
 
-from testbeds.adapters.command_runner import CommandResult
+from testbeds.adapters.command_runner import AllowlistedCommandRunner, CommandResult
 from testbeds.adapters.argo_rollouts import ArgoRolloutsDemoAdapter
 from testbeds.environments.argo_rollouts import ARGO_ROLLOUTS_ENVIRONMENT
 from testbeds.models import (
@@ -131,6 +131,16 @@ def test_pinned_release_and_supported_fixture_capabilities_are_explicit():
     assert all(
         "@sha256:" in image for image in ARGO_ROLLOUTS_ENVIRONMENT.images.values()
     )
+
+
+def test_command_runner_permits_kubectl_kustomize_for_the_pinned_fixture(tmp_path):
+    runner = AllowlistedCommandRunner()
+    runner._validate(("kubectl", "kustomize", str(tmp_path / "examples" / "canary")))
+
+
+def test_command_runner_permits_kubectl_argo_rollouts_plugin_commands():
+    runner = AllowlistedCommandRunner()
+    runner._validate(("kubectl", "argo", "rollouts", "set", "image", "canary-demo"))
 
 
 def test_namespace_is_dedicated_sanitized_and_validated(tmp_path):

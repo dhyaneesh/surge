@@ -70,7 +70,22 @@ class AllowlistedCommandRunner:
     _SUBCOMMANDS = {
         "git": frozenset({"clone", "checkout", "rev-parse"}),
         "helm": frozenset({"upgrade", "get", "uninstall", "version"}),
-        "kubectl": frozenset({"apply", "delete", "get", "describe", "logs", "rollout", "wait", "patch", "scale", "set"}),
+        "kubectl": frozenset(
+            {
+                "apply",
+                "argo",
+                "delete",
+                "get",
+                "describe",
+                "kustomize",
+                "logs",
+                "rollout",
+                "wait",
+                "patch",
+                "scale",
+                "set",
+            }
+        ),
     }
     _FORBIDDEN_TOKENS = frozenset({";", "&&", "||", "|", ">", ">>", "<", "`", "$()"})
 
@@ -185,6 +200,10 @@ class AllowlistedCommandRunner:
             raise CommandRejected("subcommand is not allowlisted")
         if argv[0] == "kubectl" and argv[1] in {"exec", "run", "cp", "port-forward"}:
             raise CommandRejected("interactive/arbitrary execution is prohibited")
+        if argv[:3] == ("kubectl", "argo", "rollouts") and (
+            len(argv) < 4 or argv[3] not in {"abort", "promote", "set"}
+        ):
+            raise CommandRejected("unsupported kubectl argo rollouts operation")
         for token in argv:
             if token in self._FORBIDDEN_TOKENS or "\n" in token or "\x00" in token:
                 raise CommandRejected("shell syntax is prohibited")
