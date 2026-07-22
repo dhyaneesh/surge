@@ -63,12 +63,32 @@ class ObservedServiceIdentity:
 
 
 @dataclass(frozen=True, slots=True)
+class RolloutState:
+    """Normalized Argo Rollout controller state for test-only environments."""
+
+    name: str
+    phase: str | None
+    paused: bool
+    desired_replicas: int
+    ready_replicas: int
+    updated_replicas: int
+    unavailable_replicas: int
+    stable_hash: str | None
+    canary_hash: str | None
+    conditions: tuple[str, ...] = ()
+    desired_image: str | None = None
+    observed_image: str | None = None
+    recovery_healthy: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class EnvironmentState:
     environment: str = ""
     namespace: str = ""
     release: EnvironmentRelease = field(default_factory=EnvironmentRelease)
     workloads: tuple[WorkloadState, ...] = ()
     services: tuple[ObservedServiceIdentity, ...] = ()
+    rollouts: tuple[RolloutState, ...] = ()
     healthy: bool = False
     contaminated: bool = False
     changed_resources: tuple[ChangedResource, ...] = ()

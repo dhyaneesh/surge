@@ -1,0 +1,38 @@
+environment: argo-rollouts
+source_sections:
+  - 20.4 Argo Rollouts Demo
+  - 21 Test environment adapter contract
+obligations:
+  immutable_release:
+    implementation: testbeds/environments/argo_rollouts.py
+    tests: [test_pinned_release_and_supported_fixture_capabilities_are_explicit]
+  namespace_isolation:
+    implementation: testbeds/adapters/argo_rollouts.py
+    tests: [test_namespace_is_dedicated_sanitized_and_validated]
+  healthy_baseline:
+    implementation: testbeds/adapters/argo_rollouts.py
+    tests: [test_baseline_requires_rollout_health_stable_replicaset_endpoint_and_expected_version]
+  deterministic_reset:
+    implementation: testbeds/adapters/argo_rollouts.py
+    tests: [test_deploy_canary_abort_and_repeated_reset_restore_stable_version_and_delete_created_resources, test_load_uses_test_created_generator_and_reset_removes_it]
+  specified_faults:
+    implementation: testbeds/adapters/argo_rollouts.py
+    tests: [test_faults_map_to_supported_fixture_images_and_reset_is_deterministic]
+  normalized_observation:
+    implementation: testbeds/adapters/argo_rollouts.py
+    tests: [test_observe_state_normalizes_rollout_replica_set_pod_service_versions_and_health]
+  failure_diagnostics:
+    implementation: testbeds/adapters/argo_rollouts.py
+    tests: [test_failure_collects_rollout_diagnostics_and_cleanup_is_idempotent]
+  complete_cleanup:
+    implementation: testbeds/adapters/argo_rollouts.py
+    tests: [test_failure_collects_rollout_diagnostics_and_cleanup_is_idempotent]
+  production_separation:
+    implementation: testbeds/adapters/argo_rollouts.py
+    tests: [test_production_sources_do_not_import_argo_rollouts_adapter]
+  contract_and_smoke_tests:
+    implementation: tests/contract/test_argo_rollouts_adapter_contract.py
+    tests: [test_argo_rollouts_adapter_satisfies_environment_adapter_protocol, test_real_cluster_install_baseline_canary_fault_reset_and_cleanup]
+limitations:
+  - The pinned upstream canary fixture has no approval mechanism; approval-gated action behavior remains unsupported by this adapter.
+  - The pinned fixture uses image variants for predictable bad behavior but does not document a distinct latency-only fixture; artificial latency is represented by the supported yellow canary image and requires real-cluster verification.
