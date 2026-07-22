@@ -694,3 +694,35 @@ def test_manifest_check_rejects_an_undeclared_task_command(tmp_path: Path) -> No
 
     assert result.returncode == 4
     assert "uses undeclared commands: ['mystery-checker']" in result.stderr
+
+
+def test_manifest_check_rejects_a_malformed_quoted_command(tmp_path: Path) -> None:
+    write_harness_repo(tmp_path)
+    taskfile = tmp_path / "Taskfile.yml"
+    data = load_yaml(taskfile)
+    data["tasks"]["check"]["cmds"] = ['pytest "unterminated']
+    taskfile.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    result = run_harness(tmp_path, "manifest-check")
+
+    assert result.returncode == 4
+    assert "Task target check has invalid command syntax" in result.stderr
+
+
+def test_manifest_check_rejects_chained_commands_instead_of_partial_inspection(
+    tmp_path: Path,
+) -> None:
+    write_harness_repo(tmp_path)
+    taskfile = tmp_path / "Taskfile.yml"
+    data = load_yaml(taskfile)
+    data["tasks"]["check"]["cmds"] = [
+        ".tools/bin/uv run --locked pytest tests/unit && mystery-checker"
+    ]
+    taskfile.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    result = run_harness(tmp_path, "manifest-check")
+
+    assert result.returncode == 4
+    assert (
+        "Task target check uses unsupported shell control operator: &&" in result.stderr
+    )

@@ -214,10 +214,19 @@ def suite(root: Path, data: dict[str, Any], target: str, paths: list[str]) -> in
 
 
 def command_dependencies(command: str) -> set[str]:
+    if "\n" in command or "\r" in command:
+        raise ValueError("uses unsupported multiline shell command")
     try:
-        words = shlex.split(command)
-    except ValueError:
-        return set()
+        lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        words = list(lexer)
+    except ValueError as error:
+        raise ValueError(f"has invalid command syntax: {error}") from error
+    unsupported = {"&&", "||", ";", "|", "&", "(", ")", ">", ">>", "<", "<<"}
+    for word in words:
+        if word in unsupported or "`" in word:
+            raise ValueError(f"uses unsupported shell control operator: {word}")
     if not words:
         return set()
     first = Path(words[0]).name
@@ -276,7 +285,10 @@ def manifest_check(root: Path, data: dict[str, Any]) -> int:
                 expanded = command
                 for variable, value in variables.items():
                     expanded = expanded.replace(f"{{{{.{variable}}}}}", value)
-                used |= command_dependencies(expanded)
+                try:
+                    used |= command_dependencies(expanded)
+                except ValueError as error:
+                    errors.append(f"Task target {name} {error}")
         missing = used - declared
         unknown = used - known
         if missing:
