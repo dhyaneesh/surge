@@ -1,0 +1,74 @@
+schema_version: 1
+
+platform:
+  os: linux
+  architecture: amd64
+
+host_prerequisites:
+  - curl
+  - git
+  - python3
+  - sha256sum
+  - tar
+
+tools:
+  task:
+    version: 3.52.0
+    url: https://github.com/go-task/task/releases/download/v3.52.0/task_linux_amd64.tar.gz
+    sha256: 02c679ffae53dca791804847d78b31731615894e292948397c971c87ac9e95bd
+  uv:
+    version: 0.11.31
+    url: https://github.com/astral-sh/uv/releases/download/0.11.31/uv-x86_64-unknown-linux-gnu.tar.gz
+    sha256: 8cc1cd82d434ec565376f98bd938d4b715b5791a80ff2d3aa78821cf85091b4b
+
+python_commands:
+  pyright: pyright
+  pytest: pytest
+  ruff: ruff
+
+python_libraries:
+  pydantic: pydantic
+  yaml: pyyaml
+  yaml_typing: types-pyyaml
+
+# These executables are required by current or normative targets but are not
+# installed by the active Python bootstrap yet.
+baseline_gaps:
+  - bash
+  - buf
+  - go
+  - gofmt
+  - golangci-lint
+  - govulncheck
+  - kubectl
+  - npm
+  - opa
+
+# Dependencies name executable prerequisites. Capabilities describe the checks
+# exposed by the task and are consumed by the verification harness.
+targets:
+  bootstrap: {dependencies: [curl, git, python3, sha256sum, tar], capabilities: [bootstrap]}
+  format: {dependencies: [uv, ruff, gofmt, npm], capabilities: [format]}
+  format:check: {dependencies: [uv, ruff, gofmt, npm], capabilities: [format-check]}
+  lint: {dependencies: [uv, ruff, golangci-lint, npm], capabilities: [lint]}
+  lint:online-boutique: {dependencies: [uv, ruff], capabilities: [python-lint, online-boutique]}
+  typecheck: {dependencies: [uv, pyright, go, npm], capabilities: [typecheck]}
+  test:unit: {dependencies: [uv, pytest, go, npm], capabilities: [unit-test]}
+  test:contract: {dependencies: [uv, pytest, buf, opa], capabilities: [contract-test]}
+  test:integration: {dependencies: [uv, pytest], capabilities: [integration-test]}
+  test:architecture: {dependencies: [uv, python3], capabilities: [architecture-test]}
+  test:testbeds-unit: {dependencies: [uv, pytest], capabilities: [testbed, unit-test]}
+  test:testbeds-contract: {dependencies: [uv, pytest], capabilities: [testbed, contract-test]}
+  test:policy: {dependencies: [opa], capabilities: [policy-test]}
+  test:replay: {dependencies: [uv, pytest], capabilities: [replay-test]}
+  test:replay-deterministic: {dependencies: [uv, pytest], capabilities: [deterministic-replay]}
+  test:security: {dependencies: [uv, pytest, govulncheck, npm], capabilities: [security-test]}
+  test:reasoner: {dependencies: [uv, pytest], capabilities: [reasoner-test]}
+  test:keda-scaler: {dependencies: [go], capabilities: [keda-scaler-test]}
+  test:action-controller: {dependencies: [go], capabilities: [action-controller-test]}
+  test:requirements: {dependencies: [uv, python3], capabilities: [requirements-test]}
+  test:env: {dependencies: [bash, kubectl], capabilities: [environment-test]}
+  test:matrix: {dependencies: [task], capabilities: [environment-matrix]}
+  requirements:render: {dependencies: [uv, python3], capabilities: [requirements-render]}
+  requirements:check: {dependencies: [uv, python3], capabilities: [requirements-check]}
+  final: {dependencies: [task], capabilities: [verification-final]}

@@ -9,9 +9,11 @@ dependencies = []
 [dependency-groups]
 dev = [
     "pydantic>=2,<3",
+    "pyright>=1.1.400,<2",
     "pytest>=9,<10",
     "pyyaml>=6.0.2",
     "ruff==0.15.22",
+    "types-pyyaml>=6.0.12.20250516",
 ]
 
 [tool.pytest.ini_options]
