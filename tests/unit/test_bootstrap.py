@@ -297,6 +297,63 @@ def test_accepts_plain_semantic_version_output_from_pinned_tool(
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize(
+    "version_script",
+    [
+        "echo '3.52.0'; exit 1",
+        "echo 'Task version: 3.52.0-malicious'",
+        "echo 'Task version: 3.52.0-rc.1'",
+    ],
+)
+def test_rejects_archive_with_untrustworthy_version_output(
+    bootstrap_repo: dict[str, Path | dict[str, str]], version_script: str
+) -> None:
+    artifacts = bootstrap_repo["artifacts"]
+    repo = bootstrap_repo["repo"]
+    assert isinstance(artifacts, Path)
+    assert isinstance(repo, Path)
+    replacement_sha = archive(
+        artifacts / "task.tar.gz",
+        "task",
+        f"#!/bin/sh\n{version_script}\n",
+    )
+    manifest = repo / "tools/verification-tools.yaml"
+    manifest.write_text(
+        re.sub(
+            r"(task:\n(?:    .*\n){2}    sha256: )[0-9a-f]+",
+            lambda match: match.group(1) + replacement_sha,
+            manifest.read_text(),
+        ),
+        encoding="utf-8",
+    )
+
+    result = run(bootstrap_repo)
+
+    assert result.returncode != 0
+    assert "task archive version does not match 3.52.0" in result.stderr
+    assert not (repo / ".tools/bin/task").exists()
+
+
+def test_existing_tool_with_failing_version_command_is_replaced(
+    bootstrap_repo: dict[str, Path | dict[str, str]],
+) -> None:
+    repo = bootstrap_repo["repo"]
+    assert isinstance(repo, Path)
+    task = repo / ".tools/bin/task"
+    task.parent.mkdir(parents=True)
+    executable(task, "#!/bin/sh\necho '3.52.0'\nexit 1\n")
+    broken = task.read_bytes()
+
+    result = run(bootstrap_repo)
+
+    assert result.returncode == 0, result.stderr
+    assert task.read_bytes() != broken
+    assert (
+        subprocess.run([task, "--version"], check=False, capture_output=True).returncode
+        == 0
+    )
+
+
 def test_matching_tools_are_reused_and_wrong_versions_replaced(
     bootstrap_repo: dict[str, Path | dict[str, str]],
 ) -> None:
