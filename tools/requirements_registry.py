@@ -458,6 +458,7 @@ def validate_design_capability_paths(
     """Validate repository paths claimed by implemented design capabilities."""
 
     issues: list[ValidationIssue] = []
+    resolved_root = repository_root.resolve()
     for index, capability in enumerate(registry.get("design_capabilities", [])):
         if (
             not isinstance(capability, dict)
@@ -471,12 +472,31 @@ def validate_design_capability_paths(
             for path_index, value in enumerate(paths):
                 if not isinstance(value, str) or _invalid_repository_path(value):
                     continue
-                if not (repository_root / value).exists():
+                candidate = repository_root / value
+                resolved_candidate = candidate.resolve()
+                issue_path = (
+                    f"$.design_capabilities[{index}].{field}[{path_index}]"
+                )
+                if not resolved_candidate.is_relative_to(resolved_root):
+                    _issue(
+                        issues,
+                        "design_capability_path_outside_repository",
+                        issue_path,
+                        f"implemented capability path {value!r} resolves outside the repository",
+                    )
+                elif not candidate.exists():
                     _issue(
                         issues,
                         "design_capability_path_missing",
-                        f"$.design_capabilities[{index}].{field}[{path_index}]",
+                        issue_path,
                         f"implemented capability path {value!r} does not exist",
+                    )
+                elif not resolved_candidate.is_file():
+                    _issue(
+                        issues,
+                        "design_capability_path_not_file",
+                        issue_path,
+                        f"implemented capability path {value!r} is not a file",
                     )
     return sorted(set(issues))
 

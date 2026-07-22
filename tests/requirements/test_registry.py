@@ -9,6 +9,7 @@ from tools.requirements_registry import (
     main,
     render_coverage,
     render_dependency_graph,
+    validate_design_capability_paths,
     validate_traceability,
     validate_registry,
 )
@@ -270,6 +271,56 @@ class RegistryValidationTests(unittest.TestCase):
             result = main(["validate", str(registry_path)])
 
         self.assertEqual(1, result)
+
+    def test_rejects_design_capability_directory_paths(self) -> None:
+        registry = valid_registry()
+        registry["design_capabilities"].append(
+            {
+                "id": "DESIGN-HARNESS-001",
+                "source": {"document": "docs/design.md", "section": "Harness"},
+                "implementation": ["tools"],
+                "tests": ["tests"],
+                "status": "implemented",
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "tools").mkdir()
+            (root / "tests").mkdir()
+            codes = {
+                issue.code
+                for issue in validate_design_capability_paths(registry, root)
+            }
+
+        self.assertEqual({"design_capability_path_not_file"}, codes)
+
+    def test_rejects_design_capability_symlinks_escaping_repository(self) -> None:
+        registry = valid_registry()
+        registry["design_capabilities"].append(
+            {
+                "id": "DESIGN-HARNESS-001",
+                "source": {"document": "docs/design.md", "section": "Harness"},
+                "implementation": ["tools/escaped.py"],
+                "tests": ["tests/escaped.py"],
+                "status": "implemented",
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repository"
+            outside = Path(directory) / "outside.py"
+            outside.write_text("", encoding="utf-8")
+            (root / "tools").mkdir(parents=True)
+            (root / "tests").mkdir()
+            (root / "tools/escaped.py").symlink_to(outside)
+            (root / "tests/escaped.py").symlink_to(outside)
+            codes = {
+                issue.code
+                for issue in validate_design_capability_paths(registry, root)
+            }
+
+        self.assertEqual({"design_capability_path_outside_repository"}, codes)
 
     def test_renderers_are_deterministic_and_exclude_ambiguity_nodes(self) -> None:
         registry = valid_registry()
