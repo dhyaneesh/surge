@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local Kubernetes and generated testbed diagnostics
+.kube/
+testbeds/diagnostics/
