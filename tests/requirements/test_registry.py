@@ -116,7 +116,7 @@ class RegistryValidationTests(unittest.TestCase):
             },
             set(capability["tests"]),
         )
-        self.assertEqual("in_progress", capability["status"])
+        self.assertEqual("implemented", capability["status"])
 
     def test_minimal_registry_is_valid(self) -> None:
         self.assertEqual([], validate_registry(valid_registry()))

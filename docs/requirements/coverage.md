@@ -57,7 +57,7 @@ These records are non-normative implementation mappings and do not participate i
 
 | ID | Source | Status | Implementation | Tests |
 | --- | --- | --- | --- | --- |
-| `DESIGN-HARNESS-001` | `docs/superpowers/specs/2026-07-22-verification-harness-repair-design.md` §Goal, Bootstrap Contract, Task Architecture, and Tests | `in_progress` | `scripts/bootstrap.sh`, `scripts/verification-preflight.sh`, `tools/verification_harness.py`, `Taskfile.yml` | `tests/unit/test_bootstrap.py`, `tests/unit/test_verification_harness.py` |
+| `DESIGN-HARNESS-001` | `docs/superpowers/specs/2026-07-22-verification-harness-repair-design.md` §Goal, Bootstrap Contract, Task Architecture, and Tests | `implemented` | `scripts/bootstrap.sh`, `scripts/verification-preflight.sh`, `tools/verification_harness.py`, `Taskfile.yml` | `tests/unit/test_bootstrap.py`, `tests/unit/test_verification_harness.py` |
 | `DESIGN-SCENARIO-001` | `docs/spec/guardian-production-v1.md` §22 | `implemented` | `testbeds/scenarios/models.py`, `testbeds/scenarios/validation.py`, `testbeds/scenarios/loader.py` | `tests/unit/test_guardian_scenario_schema.py` |
 
 ## Status

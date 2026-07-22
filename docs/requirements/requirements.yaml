@@ -37,7 +37,7 @@ design_capabilities:
   tests:
   - tests/unit/test_bootstrap.py
   - tests/unit/test_verification_harness.py
-  status: in_progress
+  status: implemented
 - id: DESIGN-SCENARIO-001
   source:
     document: docs/spec/guardian-production-v1.md
