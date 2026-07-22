@@ -60,6 +60,21 @@ tasks:
       - "{{.UV}} run --locked --no-sync python -m tools.verification_harness suite test:architecture tests/architecture"
       - "{{.UV}} run --locked pytest tests/architecture"
 
+  mcp:signoz:check:
+    desc: Check the optional SigNoz MCP architectural boundary without loading MCP
+    cmds:
+      - task: test:architecture
+
+  mcp:signoz:smoke:
+    desc: Reserved integration-only SigNoz MCP smoke target; no client is implemented yet
+    cmds:
+      - task: test:integration
+
+  diagnostics:signoz:
+    desc: Reserved integration-only post-verdict SigNoz diagnostic target; no client is implemented yet
+    cmds:
+      - task: test:integration
+
   test:testbeds-unit:
     cmds:
       - "{{.PREFLIGHT}} test:testbeds-unit"

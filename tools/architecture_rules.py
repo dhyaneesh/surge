@@ -31,6 +31,7 @@ MODEL_CLIENT_MODULES = {
     "mistralai",
     "openai",
 }
+MCP_CLIENT_MODULES = {"mcp", "signoz_mcp", "signoz-mcp"}
 MUTATION_PROVIDER_SYMBOLS = {
     "GitOpsRollbackProvider",
     "KubernetesMutationProvider",
@@ -61,8 +62,12 @@ DEMO_SPECIFIC_TERMS = {
 # Exceptions are exact paths with reviewable rationale. Do not add wildcard or
 # substring-based exemptions.
 ARCHITECTURE_EXCEPTIONS = {
-    Path("packages/provider-sdk/interfaces.py"): "Shared provider protocol definitions only",
-    Path("packages/provider_sdk/interfaces.py"): "Shared provider protocol definitions only",
+    Path(
+        "packages/provider-sdk/interfaces.py"
+    ): "Shared provider protocol definitions only",
+    Path(
+        "packages/provider_sdk/interfaces.py"
+    ): "Shared provider protocol definitions only",
 }
 
 TS_IMPORT = re.compile(
@@ -155,14 +160,22 @@ def _text_imports(path: Path, text: str) -> list[ImportReference]:
             if in_go_block and stripped == ")":
                 in_go_block = False
                 continue
-            match = GO_BLOCK_ITEM.match(line) if in_go_block else GO_SINGLE_IMPORT.match(line)
+            match = (
+                GO_BLOCK_ITEM.match(line)
+                if in_go_block
+                else GO_SINGLE_IMPORT.match(line)
+            )
             if match:
-                references.append(ImportReference(match.group(1), frozenset(), line_number))
+                references.append(
+                    ImportReference(match.group(1), frozenset(), line_number)
+                )
             continue
         if path.suffix in {".js", ".jsx", ".ts", ".tsx"}:
             match = TS_IMPORT.match(line)
             if match:
-                references.append(ImportReference(match.group(1), frozenset(), line_number))
+                references.append(
+                    ImportReference(match.group(1), frozenset(), line_number)
+                )
             continue
         match = GENERIC_IMPORT.match(line)
         if match:
@@ -172,7 +185,9 @@ def _text_imports(path: Path, text: str) -> list[ImportReference]:
 
 
 def _imports_testbeds(module: str) -> bool:
-    return bool(re.search(r"(?:^|[./:_-])testbeds?(?:$|[./:_-])", module, re.IGNORECASE))
+    return bool(
+        re.search(r"(?:^|[./:_-])testbeds?(?:$|[./:_-])", module, re.IGNORECASE)
+    )
 
 
 def _module_matches(module: str, candidates: set[str]) -> bool:
@@ -189,7 +204,9 @@ def _provider_import(reference: ImportReference) -> bool:
     )
 
 
-def _python_write_client_lines(tree: ast.AST, imports: list[ImportReference]) -> list[int]:
+def _python_write_client_lines(
+    tree: ast.AST, imports: list[ImportReference]
+) -> list[int]:
     lines = [
         reference.line
         for reference in imports
@@ -262,6 +279,25 @@ def _check_source(
     is_scaler = _is_under(parts, "services", "keda-scaler") or _is_under(
         parts, "services", "keda_scaler"
     )
+    for reference in imports:
+        if _module_matches(reference.module, MCP_CLIENT_MODULES):
+            _add(
+                violations,
+                "ARCH-PROD-NO-MCP-CLIENT",
+                relative,
+                reference.line,
+                f"production source imports MCP client {reference.module!r}",
+                "Keep MCP clients in optional diagnostic integrations outside production services.",
+            )
+            if is_scaler:
+                _add(
+                    violations,
+                    "ARCH-SCALER-NO-MCP-CLIENT",
+                    relative,
+                    reference.line,
+                    f"KEDA scaler imports MCP client {reference.module!r}",
+                    "Keep MCP out of the deterministic KEDA polling path.",
+                )
     if is_reasoner:
         for reference in imports:
             if _provider_import(reference):
@@ -336,7 +372,9 @@ def _strip_line_comments(text: str, markers: tuple[str, ...]) -> str:
     return "\n".join(output)
 
 
-def _check_policy(root: Path, path: Path, text: str, violations: list[Violation]) -> None:
+def _check_policy(
+    root: Path, path: Path, text: str, violations: list[Violation]
+) -> None:
     relative = _relative(root, path)
     if not _is_under(_parts(relative), "policies") or path.name == "AGENTS.md":
         return

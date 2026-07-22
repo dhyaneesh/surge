@@ -99,7 +99,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             }
         )
         matches = [
-            item for item in violations if item.rule_id == "ARCH-REASONER-NO-WRITE-CLIENT"
+            item
+            for item in violations
+            if item.rule_id == "ARCH-REASONER-NO-WRITE-CLIENT"
         ]
         self.assertEqual(2, len(matches), matches)
         self.assertEqual([1, 2], sorted(item.line for item in matches))
@@ -126,11 +128,27 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             {"services/keda-scaler/poll.py": "# import openai is forbidden here\n"}
         )
 
+    def test_production_service_imports_signoz_mcp_client(self) -> None:
+        self.assert_rule(
+            {"services/reasoner/diagnostics.py": "import signoz_mcp.client\n"},
+            "ARCH-PROD-NO-MCP-CLIENT",
+            "services/reasoner/diagnostics.py",
+            1,
+        )
+
+    def test_scaler_imports_signoz_mcp_client(self) -> None:
+        self.assert_rule(
+            {"services/keda-scaler/poll.py": "from signoz_mcp import Client\n"},
+            "ARCH-SCALER-NO-MCP-CLIENT",
+            "services/keda-scaler/poll.py",
+            1,
+        )
+
     def test_scaler_inline_and_block_write_rbac(self) -> None:
         violations = self.scan(
             {
                 "services/keda-scaler/deploy/role.yaml": (
-                    "kind: Role\nrules:\n  - verbs: [\"get\", \"bind\"]\n"
+                    'kind: Role\nrules:\n  - verbs: ["get", "bind"]\n'
                 ),
                 "deploy/keda-scaler/cluster-role.yaml": (
                     "kind: ClusterRole\nrules:\n  - verbs:\n      - get\n      - impersonate\n"
@@ -146,8 +164,8 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assert_clean(
             {
                 "deploy/keda-scaler/role.yaml": (
-                    "kind: Role\nrules:\n  - resources: [\"configmaps\"]\n"
-                    "    verbs: [\"get\", \"list\", \"watch\"]\n"
+                    'kind: Role\nrules:\n  - resources: ["configmaps"]\n'
+                    '    verbs: ["get", "list", "watch"]\n'
                 )
             }
         )
@@ -156,7 +174,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assert_rule(
             {
                 "deploy/keda-scaler/role.yaml": (
-                    "kind: Role\nrules:\n  - resources: [\"*\"]\n    verbs: [\"*\"]\n"
+                    'kind: Role\nrules:\n  - resources: ["*"]\n    verbs: ["*"]\n'
                 )
             },
             "ARCH-SCALER-NO-WRITE-RBAC",
@@ -180,7 +198,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             }
         )
 
-    def test_mutation_provider_implementation_outside_controller_is_rejected(self) -> None:
+    def test_mutation_provider_implementation_outside_controller_is_rejected(
+        self,
+    ) -> None:
         self.assert_rule(
             {
                 "services/reasoner/provider.py": (

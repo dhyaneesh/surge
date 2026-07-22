@@ -57,3 +57,29 @@ task typecheck
 task test:unit
 task test:contract
 ```
+
+## SigNoz MCP usage
+
+SigNoz MCP is an agent-facing diagnostic and exploratory interface.
+
+Use it to:
+
+- inspect metrics, logs and traces;
+- diagnose failed environment scenarios;
+- discover telemetry attributes;
+- draft candidate Query Contracts;
+- summarize observability evidence for human review.
+
+Do not use SigNoz MCP to:
+
+- authorize or execute Guardian actions;
+- change deterministic hypothesis scores;
+- promote ineligible hypotheses;
+- act as the sole oracle for normative tests;
+- replace approved Query Contracts;
+- participate in the KEDA polling path;
+- bypass tenant, freshness or policy validation.
+
+E2E test verdicts must be determined before MCP-assisted diagnostics run.
+MCP results are non-authoritative unless independently captured and validated
+through an approved deterministic evidence contract.
