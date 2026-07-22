@@ -33,7 +33,7 @@ shown in the observation where available.
 | --- | --- | ---: | --- |
 | `bootstrap` | `./scripts/bootstrap.sh` | 0 | Pinned tools reused/installed; locked sync and preflight completed. |
 | `format` | `.tools/bin/task format FILES=/tmp/surge-format.sJBWw4.py` | 0 | Only a disposable temporary Python file was reformatted; no repository source was passed. |
-| `test:unit` | `PYTEST_ADDOPTS=-s .tools/bin/task test:unit` | 0 | 202 passed. `-s` avoided an external shared-temporary capture cleanup anomaly from the first invocation. |
+| `test:unit` | `PYTEST_ADDOPTS=-s .tools/bin/task test:unit` | 0 | 203 passed. `-s` avoided an external shared-temporary capture cleanup anomaly from the first invocation. |
 | `test:contract` | `PYTEST_ADDOPTS=-s .tools/bin/task test:contract` | 0 | 7 passed, 6 skipped by the suite's existing conditional tests. |
 | `test:testbeds-unit` | `PYTEST_ADDOPTS=-s .tools/bin/task test:testbeds-unit` | 0 | 148 passed. |
 | `test:testbeds-contract` | `PYTEST_ADDOPTS=-s .tools/bin/task test:testbeds-contract` | 0 | 7 passed, 6 skipped by the suite's existing conditional tests. |
