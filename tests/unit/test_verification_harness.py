@@ -201,7 +201,6 @@ def write_harness_repo(
     *,
     uv_version: str | None = "0.11.31",
     capability: str = "active",
-    aggregate_capability: str = "active",
     children: list[str] | None = None,
 ) -> None:
     tools = root / "tools"
@@ -219,7 +218,7 @@ python_commands:
 python_libraries: {{}}
 capabilities:
   check: {{availability: {capability}, reason: no tests are configured}}
-  aggregate: {{availability: {aggregate_capability}, reason: no tests are configured}}
+  aggregate: {{availability: active}}
 targets:
   check:
     dependencies: [uv, pytest]
@@ -307,24 +306,45 @@ def test_environment_guard_rejects_missing_unknown_and_extra_arguments() -> None
 def test_matrix_baseline_preflight_does_not_run_environment_script(
     tmp_path: Path,
 ) -> None:
-    write_harness_repo(
-        tmp_path, aggregate_capability="baseline", children=["check"]
+    tools = tmp_path / "tools"
+    tools.mkdir(parents=True)
+    (tools / "verification-tools.yaml").write_text(
+        """schema_version: 1
+tools: {}
+python_commands: {}
+python_libraries: {}
+capabilities:
+  test:env: {availability: baseline, reason: no tests are configured}
+  test:matrix: {availability: baseline, reason: no tests are configured}
+targets:
+  test:env:
+    dependencies: []
+    capabilities: [test:env]
+  test:matrix:
+    dependencies: []
+    capabilities: [test:matrix]
+    children: [test:env]
+""",
+        encoding="utf-8",
     )
     sentinel = tmp_path / "environment-script-ran"
+    environment_script = tmp_path / "scripts/test-environment.sh"
+    write_executable(environment_script, ': > "$VERIFICATION_SENTINEL"')
 
     result = subprocess.run(
         [
             "bash",
             "-c",
-            '"$1" -m tools.verification_harness aggregate aggregate && touch "$2"',
+            '"$1" -m tools.verification_harness aggregate test:matrix && "$2" otel-demo',
             "matrix-test",
             sys.executable,
-            str(sentinel),
+            str(environment_script),
         ],
         cwd=ROOT,
         env={
             **os.environ,
             "VERIFICATION_REPO_ROOT": str(tmp_path),
+            "VERIFICATION_SENTINEL": str(sentinel),
             "PYTHONPATH": str(ROOT),
         },
         check=False,
@@ -333,7 +353,8 @@ def test_matrix_baseline_preflight_does_not_run_environment_script(
     )
 
     assert result.returncode == 3
-    assert "[baseline] aggregate: no tests are configured" in result.stderr
+    assert "[baseline] test:matrix: no tests are configured" in result.stderr
+    assert "[baseline] test:env: no tests are configured" in result.stderr
     assert not sentinel.exists()
 
 
