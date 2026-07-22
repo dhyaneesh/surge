@@ -212,6 +212,10 @@ def test_baseline_document_covers_every_target_and_no_green_rule() -> None:
     assert "Source, suite, and traceability status" in baseline
     assert "exact command" in baseline.casefold()
     assert "exit status" in baseline.casefold()
+    assert (
+        "149 traceability issues: 121 missing implemented normative test markers "
+        "and 28 acceptance tests without implementations"
+    ) in baseline
 
 
 def test_manifest_python_commands_have_explicit_dev_dependencies() -> None:

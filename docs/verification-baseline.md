@@ -63,7 +63,7 @@ exposed the authoritative suite results above.
 | `test:requirements` | `.tools/bin/task test:requirements` | 0 | Requirement-registry unit tests passed. |
 | `test:env` | `.tools/bin/task test:env ENV=otel-demo` | 201 | Valid environment ID; `[baseline]`: no environment tests are configured. |
 | `test:matrix` | `.tools/bin/task test:matrix` | 201 | Aggregate preflight failed closed with `[baseline]`; no environment child ran. |
-| `requirements:check` | `.tools/bin/task requirements:check` | 201 | Checker child exit 1: 121 missing implemented normative test markers. |
+| `requirements:check` | `.tools/bin/task requirements:check` | 201 | Checker child exit 1: 149 traceability issues: 121 missing implemented normative test markers and 28 acceptance tests without implementations. |
 | `final` | `.tools/bin/task final` | 201 | Aggregate preflight failed closed on missing integration, security, replay, and matrix capabilities; no child target ran. |
 
 ## Structurally validated mutating target
