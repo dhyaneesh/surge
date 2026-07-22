@@ -90,7 +90,23 @@ targets:
   test:action-controller: {dependencies: [task], capabilities: [test:action-controller]}
   test:requirements: {dependencies: [task, uv], capabilities: [test:requirements]}
   test:env: {dependencies: [task], capabilities: [test:env]}
-  test:matrix: {dependencies: [task], capabilities: [test:matrix]}
+  test:matrix:
+    dependencies: [task]
+    capabilities: [test:matrix]
+    children: [test:env]
   requirements:render: {dependencies: [task, uv], capabilities: [requirements:render]}
   requirements:check: {dependencies: [task, uv], capabilities: [requirements:check]}
-  final: {dependencies: [task], capabilities: [final]}
+  final:
+    dependencies: [task]
+    capabilities: [final]
+    children:
+      - format:check
+      - lint
+      - typecheck
+      - test:unit
+      - test:contract
+      - test:integration
+      - test:security
+      - test:replay
+      - test:matrix
+      - requirements:check
