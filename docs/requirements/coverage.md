@@ -7,6 +7,7 @@ Normative source: `docs/spec/guardian-production-v1.md`.
 
 - Normative requirements: **121**
 - Normative acceptance tests: **28**
+- Supporting design capabilities: **2**
 - Implementation test obligations: **149**
 - Structured ambiguities: **222**
 - Duplicate IDs: **0** (required for generation)
@@ -50,8 +51,17 @@ Normative source: `docs/spec/guardian-production-v1.md`.
 | `TTL` | 6 | 1 | 7 | `AT-TTL-001`, `GRD-TTL-001`, `GRD-TTL-002`, `GRD-TTL-003`, `GRD-TTL-004`, `GRD-TTL-005`, `GRD-TTL-006` |
 | `WF` | 4 | 1 | 5 | `AT-WF-001`, `GRD-WF-001`, `GRD-WF-002`, `GRD-WF-003`, `GRD-WF-004` |
 
+## Supporting design capabilities
+
+These records are non-normative implementation mappings and do not participate in `GRD-*` or `AT-*` dependency validation.
+
+| ID | Source | Status | Implementation | Tests |
+| --- | --- | --- | --- | --- |
+| `DESIGN-HARNESS-001` | `docs/superpowers/specs/2026-07-22-verification-harness-repair-design.md` §Goal, Bootstrap Contract, Task Architecture, and Tests | `in_progress` | `scripts/bootstrap.sh`, `scripts/verification-preflight.sh`, `tools/verification_harness.py`, `Taskfile.yml` | `tests/unit/test_bootstrap.py`, `tests/unit/test_verification_harness.py` |
+| `DESIGN-SCENARIO-001` | `docs/spec/guardian-production-v1.md` §22 | `implemented` | `testbeds/scenarios/models.py`, `testbeds/scenarios/validation.py`, `testbeds/scenarios/loader.py` | `tests/unit/test_guardian_scenario_schema.py` |
+
 ## Status
 
-All implementation items remain `not_started`; all test obligations remain `not_implemented`. Status may advance only with validator-approved passing evidence.
+All normative implementation items remain `not_started`; all test obligations remain `not_implemented`. Status may advance only with validator-approved passing evidence.
 
 This file is generated. Run `task requirements:render`; do not edit it independently.

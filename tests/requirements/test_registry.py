@@ -3,6 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 from tools.requirements_registry import (
     render_coverage,
     render_dependency_graph,
@@ -72,6 +74,7 @@ def valid_registry() -> dict:
             {"id": "keda-rabbitmq", "name": "KEDA RabbitMQ Sample"},
         ],
         "requirements": [requirement],
+        "design_capabilities": [],
         "acceptance_tests": [],
         "test_obligations": [obligation],
     }
@@ -82,6 +85,37 @@ def issue_codes(registry: dict) -> set[str]:
 
 
 class RegistryValidationTests(unittest.TestCase):
+    def test_registry_tracks_verification_harness_as_non_normative_design(self) -> None:
+        repository_root = Path(__file__).resolve().parents[2]
+        registry = yaml.safe_load(
+            (repository_root / "docs/requirements/requirements.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        capabilities = {
+            item["id"]: item for item in registry["design_capabilities"]
+        }
+        self.assertIn("DESIGN-HARNESS-001", capabilities)
+        capability = capabilities["DESIGN-HARNESS-001"]
+        self.assertEqual(
+            {
+                "scripts/bootstrap.sh",
+                "scripts/verification-preflight.sh",
+                "tools/verification_harness.py",
+                "Taskfile.yml",
+            },
+            set(capability["implementation"]),
+        )
+        self.assertEqual(
+            {
+                "tests/unit/test_bootstrap.py",
+                "tests/unit/test_verification_harness.py",
+            },
+            set(capability["tests"]),
+        )
+        self.assertEqual("in_progress", capability["status"])
+
     def test_minimal_registry_is_valid(self) -> None:
         self.assertEqual([], validate_registry(valid_registry()))
 
@@ -120,9 +154,7 @@ class RegistryValidationTests(unittest.TestCase):
 
     def test_rejects_ambiguity_text_in_typed_array(self) -> None:
         registry = valid_registry()
-        registry["requirements"][0]["dependencies"] = [
-            "AMBIGUOUS: no dependency"
-        ]
+        registry["requirements"][0]["dependencies"] = ["AMBIGUOUS: no dependency"]
         self.assertIn("invalid_typed_array_value", issue_codes(registry))
 
     def test_rejects_absolute_parent_relative_and_machine_paths(self) -> None:
@@ -146,6 +178,55 @@ class RegistryValidationTests(unittest.TestCase):
         registry = valid_registry()
         registry["requirements"][0]["provenance"]["dependencies"] = "guessed"
         self.assertIn("unknown_provenance", issue_codes(registry))
+
+    def test_accepts_non_normative_design_capability(self) -> None:
+        registry = valid_registry()
+        registry["design_capabilities"].append(
+            {
+                "id": "DESIGN-SCENARIO-001",
+                "source": {
+                    "document": "docs/spec/guardian-production-v1.md",
+                    "section": "22",
+                },
+                "implementation": ["testbeds/scenarios/models.py"],
+                "tests": ["tests/unit/test_guardian_scenario_schema.py"],
+                "status": "implemented",
+            }
+        )
+
+        self.assertEqual([], validate_registry(registry))
+        coverage = render_coverage(registry)
+        self.assertIn("## Supporting design capabilities", coverage)
+        self.assertIn("DESIGN-SCENARIO-001", coverage)
+        self.assertIn("Normative requirements: **1**", coverage)
+
+    def test_rejects_malformed_design_capability(self) -> None:
+        registry = valid_registry()
+        registry["design_capabilities"].append(
+            {
+                "id": "GRD-SCENARIO-001",
+                "source": {"document": "", "section": ""},
+                "implementation": [],
+                "tests": [],
+                "status": "not_implemented",
+            }
+        )
+
+        self.assertTrue(
+            {
+                "invalid_design_capability_id",
+                "invalid_design_capability_source",
+                "missing_design_capability_implementation",
+                "missing_design_capability_tests",
+                "invalid_design_capability_status",
+            }.issubset(issue_codes(registry))
+        )
+
+    def test_rejects_non_array_design_capabilities(self) -> None:
+        registry = valid_registry()
+        registry["design_capabilities"] = {"id": "DESIGN-SCENARIO-001"}
+
+        self.assertIn("invalid_schema", issue_codes(registry))
 
     def test_renderers_are_deterministic_and_exclude_ambiguity_nodes(self) -> None:
         registry = valid_registry()
@@ -225,9 +306,7 @@ class TraceabilityCheckerTests(unittest.TestCase):
     def test_fails_when_at_has_no_implementation(self) -> None:
         registry = valid_registry()
         add_acceptance_test(registry)
-        metadata = implementation_metadata(
-            "tests/grd.py", "TST-GRD-REA-001-UNIT"
-        )
+        metadata = implementation_metadata("tests/grd.py", "TST-GRD-REA-001-UNIT")
         codes = self.scan(
             registry,
             metadata,
@@ -239,9 +318,7 @@ class TraceabilityCheckerTests(unittest.TestCase):
         registry = valid_registry()
         registry["requirements"][0]["implementation_status"] = "implemented"
         registry["requirements"][0]["test_status"] = "passing"
-        metadata = implementation_metadata(
-            "tests/grd.py", "TST-GRD-REA-001-UNIT"
-        )
+        metadata = implementation_metadata("tests/grd.py", "TST-GRD-REA-001-UNIT")
         codes = self.scan(
             registry,
             metadata,
@@ -253,9 +330,7 @@ class TraceabilityCheckerTests(unittest.TestCase):
         registry = valid_registry()
         registry["requirements"][0]["implementation_status"] = "implemented"
         registry["requirements"][0]["test_status"] = "passing"
-        metadata = implementation_metadata(
-            "tests/grd.py", "TST-GRD-REA-001-UNIT"
-        )
+        metadata = implementation_metadata("tests/grd.py", "TST-GRD-REA-001-UNIT")
         results = [
             {
                 "schema_version": "guardian.test-result/v1",
@@ -273,18 +348,14 @@ class TraceabilityCheckerTests(unittest.TestCase):
         self.assertNotIn("complete_without_passing_evidence", codes)
 
     def test_fails_when_referenced_test_file_does_not_exist(self) -> None:
-        metadata = implementation_metadata(
-            "tests/missing.py", "TST-GRD-REA-001-UNIT"
-        )
+        metadata = implementation_metadata("tests/missing.py", "TST-GRD-REA-001-UNIT")
         self.assertIn(
             "referenced_test_file_missing",
             self.scan(valid_registry(), metadata),
         )
 
     def test_fails_when_test_file_lacks_obligation_marker(self) -> None:
-        metadata = implementation_metadata(
-            "tests/grd.py", "TST-GRD-REA-001-UNIT"
-        )
+        metadata = implementation_metadata("tests/grd.py", "TST-GRD-REA-001-UNIT")
         codes = self.scan(
             valid_registry(), metadata, {"tests/grd.py": "def test_grd(): pass\n"}
         )
@@ -292,9 +363,7 @@ class TraceabilityCheckerTests(unittest.TestCase):
 
     def test_fails_when_demo_scenario_has_no_compatible_environment(self) -> None:
         registry = valid_registry()
-        metadata = implementation_metadata(
-            "tests/grd.py", "TST-GRD-REA-001-UNIT"
-        )
+        metadata = implementation_metadata("tests/grd.py", "TST-GRD-REA-001-UNIT")
         metadata["demo_scenarios"] = [
             {
                 "requirement_id": "GRD-REA-001",
@@ -312,9 +381,7 @@ class TraceabilityCheckerTests(unittest.TestCase):
     def test_fails_when_waived_without_reviewed_waiver(self) -> None:
         registry = valid_registry()
         registry["requirements"][0]["implementation_status"] = "waived"
-        metadata = implementation_metadata(
-            "tests/grd.py", "TST-GRD-REA-001-UNIT"
-        )
+        metadata = implementation_metadata("tests/grd.py", "TST-GRD-REA-001-UNIT")
         codes = self.scan(
             registry,
             metadata,
@@ -325,9 +392,7 @@ class TraceabilityCheckerTests(unittest.TestCase):
     def test_accepts_explicit_reviewed_waiver(self) -> None:
         registry = valid_registry()
         registry["requirements"][0]["implementation_status"] = "waived"
-        metadata = implementation_metadata(
-            "tests/grd.py", "TST-GRD-REA-001-UNIT"
-        )
+        metadata = implementation_metadata("tests/grd.py", "TST-GRD-REA-001-UNIT")
         metadata["waivers"] = [
             {
                 "requirement_id": "GRD-REA-001",

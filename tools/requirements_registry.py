@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +36,7 @@ ENVIRONMENT_IDS = {
     "keda-rabbitmq",
 }
 REQUIREMENT_ID = re.compile(r"^(?:GRD|AT)-[A-Z]+-\d{3}$")
+DESIGN_CAPABILITY_ID = re.compile(r"^DESIGN-[A-Z]+-\d{3}$")
 TEST_ID = re.compile(
     r"^TST-(?:GRD|AT)-[A-Z]+-\d{3}-(?:UNIT|CONTRACT|INTEGRATION|ACCEPTANCE|REPLAY|SECURITY)$"
 )
@@ -60,14 +60,12 @@ class ValidationIssue:
         return f"{self.code} at {self.path}: {self.message}"
 
 
-def _issue(
-    issues: list[ValidationIssue], code: str, path: str, message: str
-) -> None:
+def _issue(issues: list[ValidationIssue], code: str, path: str, message: str) -> None:
     issues.append(ValidationIssue(code, path, message))
 
 
 def _invalid_repository_path(value: str) -> bool:
-    if value.startswith(('/', '\\')):
+    if value.startswith(("/", "\\")):
         return True
     if re.match(r"^[A-Za-z]:[\\/]", value):
         return True
@@ -158,16 +156,35 @@ def validate_registry(registry: dict[str, Any]) -> list[ValidationIssue]:
         )
 
     requirements = registry.get("requirements", [])
+    design_capabilities_value = registry.get("design_capabilities", [])
+    if isinstance(design_capabilities_value, list):
+        design_capabilities = design_capabilities_value
+    else:
+        _issue(
+            issues,
+            "invalid_schema",
+            "$.design_capabilities",
+            "must be an array",
+        )
+        design_capabilities = []
     acceptance_tests = registry.get("acceptance_tests", [])
     obligations = registry.get("test_obligations", [])
     environments = registry.get("environments", [])
     normative_items = [*requirements, *acceptance_tests]
 
     normative_ids = [item.get("id") for item in normative_items]
+    design_capability_ids = [item.get("id") for item in design_capabilities]
     obligation_ids = [item.get("id") for item in obligations]
     environment_ids = [item.get("id") for item in environments]
-    all_ids = [*normative_ids, *obligation_ids, *environment_ids]
-    for identifier, count in sorted(Counter(all_ids).items(), key=lambda pair: str(pair[0])):
+    all_ids = [
+        *normative_ids,
+        *design_capability_ids,
+        *obligation_ids,
+        *environment_ids,
+    ]
+    for identifier, count in sorted(
+        Counter(all_ids).items(), key=lambda pair: str(pair[0])
+    ):
         if count > 1:
             _issue(
                 issues,
@@ -197,10 +214,14 @@ def validate_registry(registry: dict[str, Any]) -> list[ValidationIssue]:
         for index, item in enumerate(collection):
             base = f"$.{collection_name}[{index}]"
             identifier = item.get("id")
-            if not isinstance(identifier, str) or not REQUIREMENT_ID.fullmatch(identifier):
+            if not isinstance(identifier, str) or not REQUIREMENT_ID.fullmatch(
+                identifier
+            ):
                 _issue(issues, "invalid_id", f"{base}.id", "invalid normative ID")
             expected_prefix = "GRD-" if collection_name == "requirements" else "AT-"
-            if isinstance(identifier, str) and not identifier.startswith(expected_prefix):
+            if isinstance(identifier, str) and not identifier.startswith(
+                expected_prefix
+            ):
                 _issue(
                     issues,
                     "invalid_id",
@@ -252,10 +273,16 @@ def validate_registry(registry: dict[str, Any]) -> list[ValidationIssue]:
 
             ambiguities = item.get("ambiguities", [])
             if not isinstance(ambiguities, list):
-                _issue(issues, "invalid_schema", f"{base}.ambiguities", "must be an array")
+                _issue(
+                    issues, "invalid_schema", f"{base}.ambiguities", "must be an array"
+                )
                 ambiguities = []
             for ambiguity_index, ambiguity in enumerate(ambiguities):
-                if not isinstance(ambiguity, dict) or not ambiguity.get("field") or not ambiguity.get("reason"):
+                if (
+                    not isinstance(ambiguity, dict)
+                    or not ambiguity.get("field")
+                    or not ambiguity.get("reason")
+                ):
                     _issue(
                         issues,
                         "invalid_ambiguity",
@@ -293,6 +320,61 @@ def validate_registry(registry: dict[str, Any]) -> list[ValidationIssue]:
                     f"{base}.test_status",
                     f"unsupported status {test_status!r}",
                 )
+
+    for index, capability in enumerate(design_capabilities):
+        base = f"$.design_capabilities[{index}]"
+        if not isinstance(capability, dict):
+            _issue(issues, "invalid_schema", base, "must be an object")
+            continue
+        identifier = capability.get("id")
+        if not isinstance(identifier, str) or not DESIGN_CAPABILITY_ID.fullmatch(
+            identifier
+        ):
+            _issue(
+                issues,
+                "invalid_design_capability_id",
+                f"{base}.id",
+                "design capability IDs must match DESIGN-<DOMAIN>-<NNN>",
+            )
+        source = capability.get("source")
+        if (
+            not isinstance(source, dict)
+            or not isinstance(source.get("document"), str)
+            or not source.get("document")
+            or not isinstance(source.get("section"), str)
+            or not source.get("section")
+        ):
+            _issue(
+                issues,
+                "invalid_design_capability_source",
+                f"{base}.source",
+                "source requires non-empty document and section strings",
+            )
+        for field, code in (
+            ("implementation", "missing_design_capability_implementation"),
+            ("tests", "missing_design_capability_tests"),
+        ):
+            paths = capability.get(field)
+            if (
+                not isinstance(paths, list)
+                or not paths
+                or any(not isinstance(path, str) or not path for path in paths)
+            ):
+                _issue(
+                    issues,
+                    code,
+                    f"{base}.{field}",
+                    "must contain at least one repository-relative path",
+                )
+        status = capability.get("status")
+        if status not in IMPLEMENTATION_STATUSES:
+            _issue(
+                issues,
+                "invalid_design_capability_status",
+                f"{base}.status",
+                f"unsupported status {status!r}",
+            )
+
     for index, obligation in enumerate(obligations):
         base = f"$.test_obligations[{index}]"
         identifier = obligation.get("id")
@@ -372,7 +454,10 @@ def validate_traceability(
         item.get("id") for item in obligations if isinstance(item.get("id"), str)
     }
 
-    if implementation.get("schema_version") != "guardian.requirements-implementation/v1":
+    if (
+        implementation.get("schema_version")
+        != "guardian.requirements-implementation/v1"
+    ):
         _issue(
             issues,
             "invalid_implementation_schema",
@@ -381,7 +466,9 @@ def validate_traceability(
         )
 
     implementation_records = implementation.get("test_implementations", [])
-    implementation_ids = [record.get("test_obligation_id") for record in implementation_records]
+    implementation_ids = [
+        record.get("test_obligation_id") for record in implementation_records
+    ]
     for identifier, count in Counter(implementation_ids).items():
         if count > 1:
             _issue(
@@ -559,8 +646,7 @@ def validate_traceability(
                 continue
             required_environments = set(item.get("applicable_environments", []))
             compatible = any(
-                required_environments
-                & set(scenario.get("compatible_environments", []))
+                required_environments & set(scenario.get("compatible_environments", []))
                 for scenario in scenarios_by_requirement.get(item.get("id"), [])
             )
             if not compatible:
@@ -589,7 +675,10 @@ def validate_traceability(
                 f"unknown requirement {requirement_id!r}",
             )
             continue
-        if not all(isinstance(waiver.get(field), str) and waiver[field].strip() for field in reviewed_fields):
+        if not all(
+            isinstance(waiver.get(field), str) and waiver[field].strip()
+            for field in reviewed_fields
+        ):
             _issue(
                 issues,
                 "invalid_waiver",
@@ -634,7 +723,10 @@ def validate_traceability(
 def ambiguity_count(registry: dict[str, Any]) -> int:
     return sum(
         len(item.get("ambiguities", []))
-        for item in [*registry.get("requirements", []), *registry.get("acceptance_tests", [])]
+        for item in [
+            *registry.get("requirements", []),
+            *registry.get("acceptance_tests", []),
+        ]
     )
 
 
@@ -642,6 +734,7 @@ def render_coverage(registry: dict[str, Any]) -> str:
     """Render the human-readable coverage report deterministically."""
 
     requirements = registry.get("requirements", [])
+    design_capabilities = registry.get("design_capabilities", [])
     acceptance_tests = registry.get("acceptance_tests", [])
     obligations = registry.get("test_obligations", [])
     grouped: dict[str, dict[str, list[str]]] = defaultdict(
@@ -665,6 +758,7 @@ def render_coverage(registry: dict[str, Any]) -> str:
         "",
         f"- Normative requirements: **{len(requirements)}**",
         f"- Normative acceptance tests: **{len(acceptance_tests)}**",
+        f"- Supporting design capabilities: **{len(design_capabilities)}**",
         f"- Implementation test obligations: **{len(obligations)}**",
         f"- Structured ambiguities: **{ambiguity_count(registry)}**",
         "- Duplicate IDs: **0** (required for generation)",
@@ -677,7 +771,8 @@ def render_coverage(registry: dict[str, Any]) -> str:
         "| --- | ---: |",
     ]
     lines.extend(
-        f"| `{test_type}` | {count} |" for test_type, count in sorted(test_types.items())
+        f"| `{test_type}` | {count} |"
+        for test_type, count in sorted(test_types.items())
     )
     lines.extend(
         [
@@ -700,9 +795,31 @@ def render_coverage(registry: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## Supporting design capabilities",
+            "",
+            "These records are non-normative implementation mappings and do not participate in `GRD-*` or `AT-*` dependency validation.",
+            "",
+            "| ID | Source | Status | Implementation | Tests |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+    )
+    for capability in sorted(design_capabilities, key=lambda item: item.get("id", "")):
+        source = capability.get("source", {})
+        source_text = f"`{source.get('document', '')}` §{source.get('section', '')}"
+        implementation = ", ".join(
+            f"`{path}`" for path in capability.get("implementation", [])
+        )
+        tests = ", ".join(f"`{path}`" for path in capability.get("tests", []))
+        lines.append(
+            f"| `{capability.get('id', '')}` | {source_text} | "
+            f"`{capability.get('status', '')}` | {implementation} | {tests} |"
+        )
+    lines.extend(
+        [
+            "",
             "## Status",
             "",
-            "All implementation items remain `not_started`; all test obligations remain `not_implemented`. Status may advance only with validator-approved passing evidence.",
+            "All normative implementation items remain `not_started`; all test obligations remain `not_implemented`. Status may advance only with validator-approved passing evidence.",
             "",
             "This file is generated. Run `task requirements:render`; do not edit it independently.",
         ]
@@ -766,7 +883,9 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     try:
         import yaml
     except ImportError as error:
-        raise SystemExit("PyYAML is required; run through uv with the dev dependencies") from error
+        raise SystemExit(
+            "PyYAML is required; run through uv with the dev dependencies"
+        ) from error
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise SystemExit(f"{path} must contain a YAML mapping")
@@ -778,7 +897,11 @@ def _load_test_results(results_path: Path) -> list[dict[str, Any]]:
 
     if not results_path.exists():
         return []
-    paths = [results_path] if results_path.is_file() else sorted(results_path.rglob("*.json"))
+    paths = (
+        [results_path]
+        if results_path.is_file()
+        else sorted(results_path.rglob("*.json"))
+    )
     results: list[dict[str, Any]] = []
     for path in paths:
         try:
@@ -792,7 +915,9 @@ def _load_test_results(results_path: Path) -> list[dict[str, Any]]:
                 results.append(record)
             else:
                 results.append(
-                    {"__load_error__": f"{path.as_posix()}: result must be a JSON object"}
+                    {
+                        "__load_error__": f"{path.as_posix()}: result must be a JSON object"
+                    }
                 )
     return results
 
@@ -880,7 +1005,10 @@ def main(argv: list[str] | None = None) -> int:
         graph_path.write_text(graph, encoding="utf-8", newline="\n")
     elif arguments.command == "check":
         stale = []
-        if not coverage_path.exists() or coverage_path.read_text(encoding="utf-8") != coverage:
+        if (
+            not coverage_path.exists()
+            or coverage_path.read_text(encoding="utf-8") != coverage
+        ):
             stale.append(coverage_path.as_posix())
         if not graph_path.exists() or graph_path.read_text(encoding="utf-8") != graph:
             stale.append(graph_path.as_posix())
