@@ -7,7 +7,12 @@ requires-python = ">=3.13"
 dependencies = []
 
 [dependency-groups]
-dev = ["pyyaml>=6.0.2", "ruff==0.15.22"]
+dev = [
+    "pydantic>=2,<3",
+    "pytest>=9,<10",
+    "pyyaml>=6.0.2",
+    "ruff==0.15.22",
+]
 
 [tool.pytest.ini_options]
 markers = [

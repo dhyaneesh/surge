@@ -1,0 +1,62 @@
+apiVersion: tests.guardian.io/v1alpha1
+kind: GuardianScenario
+
+metadata:
+  name: legitimate-demand-scale-up
+
+spec:
+  applicableEnvironments:
+    - otel-demo
+    - aws-retail
+    - online-boutique
+    - keda-rabbitmq
+  unsupportedEnvironments: []
+  requiredCapabilities:
+    - horizontally-scalable
+  requiredFaults: []
+  requiredTelemetry:
+    - metrics
+    - traces
+  requiredProviders:
+    - kubernetes
+
+  target:
+    serviceSelector:
+      role: request-processor
+      capabilities:
+        - horizontally-scalable
+
+  baseline:
+    healthyFor: 5m
+
+  stimulus:
+    load:
+      pattern: step
+      multiplier: 4
+      duration: 10m
+
+  expected:
+    incidentClass: load_spike
+    proposedAction:
+      type: scale
+    allowedActions:
+      - scale
+    forbiddenActions:
+      - rollback
+    evidenceTypes:
+      - metrics
+      - traces
+      - load
+      - telemetry-quality
+    policyDecision: allowed
+    workflowStates:
+      - active
+      - assessment
+      - classified
+      - action-proposed
+      - executing
+      - recovery-verification
+      - recovered
+    recovery:
+      requireFreshTelemetry: true
+      expectedResult: recovered
