@@ -137,16 +137,35 @@ def test_manifest_targets_declare_dependencies_and_capabilities() -> None:
         assert set(target["dependencies"]) <= active_dependencies, name
         assert set(target["capabilities"]) <= set(capabilities), name
 
-    assert {
-        name for name, value in capabilities.items() if value["status"] == "active"
-    } == {
-        "python",
-        "requirements",
-        "tooling",
+    assert {name: target["capabilities"] for name, target in targets.items()} == {
+        name: [name] for name in MANDATORY_TARGETS
+    }
+
+    baseline_targets = {
+        "test:action-controller",
+        "test:env",
+        "test:integration",
+        "test:keda-scaler",
+        "test:matrix",
+        "test:policy",
+        "test:reasoner",
+        "test:replay",
+        "test:replay-deterministic",
+        "test:security",
     }
     assert {
-        name for name, value in capabilities.items() if value["status"] == "baseline"
-    } == {"buf", "environment", "go", "kubernetes", "node", "policy"}
+        name
+        for name, capability in capabilities.items()
+        if capability["availability"] == "baseline"
+    } == baseline_targets
+    for name in baseline_targets:
+        assert capabilities[name] == {
+            "availability": "baseline",
+            "reason": "no tests are configured",
+        }
+
+    for name in MANDATORY_TARGETS - baseline_targets:
+        assert capabilities[name] == {"availability": "active"}
 
 
 def test_tools_directory_is_ignored() -> None:
