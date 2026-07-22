@@ -1,0 +1,33 @@
+# Default repository owner
+* @dhyaneesh
+
+# Normative specifications and requirement traceability
+/docs/spec/ @dhyaneesh
+/docs/requirements/ @dhyaneesh
+/docs/superpowers/plans/ @dhyaneesh
+/AGENTS.md @dhyaneesh
+/agents.md @dhyaneesh
+
+# Production policy and action contracts
+/policies/ @dhyaneesh
+/crds/ @dhyaneesh
+/proto/ @dhyaneesh
+/migrations/ @dhyaneesh
+
+# Components with production safety boundaries
+/services/action-controller/ @dhyaneesh
+/services/keda-scaler/ @dhyaneesh
+/services/reasoner/ @dhyaneesh
+
+# Test-environment isolation
+/testbeds/ @dhyaneesh
+
+# Security and machine-enforced architecture boundaries
+/tests/security/ @dhyaneesh
+/tests/architecture/ @dhyaneesh
+/tools/architecture_rules.py @dhyaneesh
+
+# CI and release gates
+/.github/workflows/ @dhyaneesh
+/.github/CODEOWNERS @dhyaneesh
+/Taskfile.yml @dhyaneesh

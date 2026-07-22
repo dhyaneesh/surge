@@ -1,0 +1,12 @@
+schema_version: guardian.requirements-implementation/v1
+
+# Each record links a stable test-obligation ID to a repository-relative test
+# file containing that ID as a marker.
+test_implementations: []
+
+# Demo-required normative items must declare at least one scenario whose
+# compatible environment intersects the requirement's environment mapping.
+demo_scenarios: []
+
+# A waived normative item requires a matching record with all review fields.
+waivers: []

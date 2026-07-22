@@ -1,0 +1,1 @@
+"""Requirement-registry validation tests."""
