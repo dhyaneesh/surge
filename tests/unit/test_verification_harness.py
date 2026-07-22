@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 import re
+import subprocess
 import tomllib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml
 
@@ -52,17 +54,14 @@ def load_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
-def applicable_agent_files() -> set[Path]:
-    candidates = {
-        ROOT / "agents.md",
-        ROOT / "policies" / "AGENTS.md",
-        ROOT / "testbeds" / "AGENTS.md",
-    }
-    candidates.update((ROOT / "services").glob("*/AGENTS.md"))
+def applicable_agent_files(tracked_paths: Iterable[str] | None = None) -> set[Path]:
+    if tracked_paths is None:
+        output = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT)
+        tracked_paths = output.decode("utf-8").split("\0")
     return {
-        path
-        for path in candidates
-        if path.is_file() and path.name.casefold() == "agents.md"
+        ROOT / path
+        for path in tracked_paths
+        if path and PurePosixPath(path).name.casefold() == "agents.md"
     }
 
 
@@ -86,6 +85,13 @@ def declared_dev_dependencies() -> set[str]:
 def test_all_applicable_agent_instructions_are_discovered() -> None:
     discovered = {str(path.relative_to(ROOT)) for path in applicable_agent_files()}
     assert discovered == EXPECTED_AGENT_FILES
+
+
+def test_agent_discovery_recognizes_an_arbitrary_nested_tracked_file() -> None:
+    discovered = applicable_agent_files(
+        ["apps/operator/docs/AGENTS.md", "packages/example/README.md"]
+    )
+    assert discovered == {ROOT / "apps/operator/docs/AGENTS.md"}
 
 
 def test_mandatory_and_referenced_targets_are_defined_by_taskfile() -> None:
