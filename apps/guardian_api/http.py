@@ -6,12 +6,15 @@ import hmac
 import ipaddress
 import json
 import logging
+import math
 import re
 import socket
+import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Condition
 from types import MappingProxyType
 from typing import Any, cast, overload
 from urllib.parse import urlsplit
@@ -36,6 +39,8 @@ from apps.guardian_api.store import (
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8080
 DEFAULT_MAX_REQUEST_BODY = 1_048_576
+DEFAULT_CONNECTION_READ_TIMEOUT = 5.0
+DEFAULT_DRAIN_TIMEOUT = 1.0
 
 _LOGGER = logging.getLogger("guardian.http")
 _INCIDENT_PATH = re.compile(
@@ -54,6 +59,7 @@ _ASSIGNED_SECRET = re.compile(
     r"(?i)\b(authorization|cookie|credential|password|secret|token)"
     r"(\s*[:=]\s*)[^\s,;]+"
 )
+_SUPPORTED_HTTP_METHODS = frozenset({"GET", "POST"})
 
 
 class _DuplicateJSONKey(ValueError):
@@ -96,6 +102,10 @@ def _redact(value: Any) -> Any:
             lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", value
         )
     return value
+
+
+def _normalized_http_method(value: object) -> str:
+    return cast(str, value) if value in _SUPPORTED_HTTP_METHODS else "unsupported"
 
 
 def _validated_token_tenants(token_tenants: Mapping[str, str]) -> Mapping[str, str]:
@@ -159,8 +169,8 @@ def _is_loopback(host: str) -> bool:
 class GuardianHTTPServer(ThreadingHTTPServer):
     """Thread-per-request server carrying only local Guardian dependencies."""
 
-    daemon_threads = False
-    block_on_close = True
+    daemon_threads = True
+    block_on_close = False
 
     def __init__(
         self,
@@ -169,11 +179,63 @@ class GuardianHTTPServer(ThreadingHTTPServer):
         token_tenants: Mapping[str, str],
         service: GuardianService,
         max_request_body: int,
+        connection_read_timeout: float,
+        drain_timeout: float,
     ) -> None:
         self.token_tenants = token_tenants
         self.guardian_service = service
         self.max_request_body = max_request_body
+        self.connection_read_timeout = connection_read_timeout
+        self.drain_timeout = drain_timeout
+        self._connection_condition = Condition()
+        self._active_connections: set[socket.socket] = set()
         super().__init__(server_address, GuardianRequestHandler)
+
+    def get_request(self):
+        request, client_address = super().get_request()
+        request.settimeout(self.connection_read_timeout)
+        with self._connection_condition:
+            self._active_connections.add(request)
+        return request, client_address
+
+    def shutdown_request(self, request: Any) -> None:
+        try:
+            super().shutdown_request(request)
+        finally:
+            with self._connection_condition:
+                self._active_connections.discard(request)
+                self._connection_condition.notify_all()
+
+    def drain_and_close(self, *, timeout_seconds: float | None = None) -> None:
+        """Stop accepting, drain bounded handlers, then close stalled sockets."""
+
+        timeout = self.drain_timeout if timeout_seconds is None else timeout_seconds
+        if (
+            not isinstance(timeout, int | float)
+            or isinstance(timeout, bool)
+            or not math.isfinite(timeout)
+            or timeout <= 0
+        ):
+            raise ValueError("drain timeout must be a positive finite number")
+        self.shutdown()
+        deadline = time.monotonic() + timeout
+        with self._connection_condition:
+            while self._active_connections:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._connection_condition.wait(timeout=remaining)
+            stalled = tuple(self._active_connections)
+        for connection in stalled:
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                connection.close()
+            except OSError:
+                pass
+        self.server_close()
 
     def resolve_tenant(self, candidate: str) -> str | None:
         if not candidate.isascii():
@@ -270,7 +332,9 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
         _LOGGER.info(
             "guardian HTTP request completed",
             extra={
-                "http_method": getattr(self, "command", "unknown"),
+                "http_method": _normalized_http_method(
+                    getattr(self, "command", "unknown")
+                ),
                 "http_status": status.value,
             },
         )
@@ -466,7 +530,7 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
     def _dispatch_request(self) -> None:
         if not self._validate_request_envelope():
             return
-        if self.command not in {"GET", "POST"}:
+        if self.command not in _SUPPORTED_HTTP_METHODS:
             route = self._route()
             allow = (
                 {
@@ -532,7 +596,10 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
         except Exception:
             _LOGGER.error(
                 "guardian HTTP request failed safely",
-                extra={"http_method": self.command, "http_status": 500},
+                extra={
+                    "http_method": _normalized_http_method(self.command),
+                    "http_status": 500,
+                },
             )
             self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal server error")
 
@@ -554,6 +621,8 @@ def create_server(
     port: int = DEFAULT_PORT,
     service: GuardianService | None = None,
     max_request_body: int = DEFAULT_MAX_REQUEST_BODY,
+    connection_read_timeout: float = DEFAULT_CONNECTION_READ_TIMEOUT,
+    drain_timeout: float = DEFAULT_DRAIN_TIMEOUT,
     allow_non_loopback: bool = False,
 ) -> GuardianHTTPServer:
     """Create a configured server without starting its request loop."""
@@ -570,9 +639,22 @@ def create_server(
         or max_request_body <= 0
     ):
         raise ValueError("request body limit must be positive")
+    for name, value in (
+        ("connection read timeout", connection_read_timeout),
+        ("drain timeout", drain_timeout),
+    ):
+        if (
+            not isinstance(value, int | float)
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            raise ValueError(f"{name} must be a positive finite number")
     return GuardianHTTPServer(
         (host, port),
         token_tenants=_validated_token_tenants(token_tenants),
         service=service or GuardianService(),
         max_request_body=max_request_body,
+        connection_read_timeout=float(connection_read_timeout),
+        drain_timeout=float(drain_timeout),
     )

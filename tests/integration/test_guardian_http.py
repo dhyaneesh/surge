@@ -6,8 +6,10 @@ import json
 import os
 import re
 import selectors
+import socket
 import subprocess
 import sys
+import time
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from http.client import HTTPConnection, HTTPResponse
@@ -110,8 +112,7 @@ def running_server(**kwargs: Any) -> Iterator[GuardianHTTPServer]:
     try:
         yield server
     finally:
-        server.shutdown()
-        server.server_close()
+        server.drain_and_close()
         thread.join(timeout=2)
         assert not thread.is_alive()
 
@@ -303,25 +304,26 @@ def test_shutdown_waits_for_active_request_handlers() -> None:
     )
     serve_thread.start()
     request_thread.start()
+    drained = False
     try:
         assert entered.wait(timeout=2)
-        server.shutdown()
-        serve_thread.join(timeout=2)
-        assert not serve_thread.is_alive()
-
-        close_thread = Thread(target=server.server_close)
-        close_thread.start()
-        close_thread.join(timeout=0.1)
-        assert close_thread.is_alive()
-
-        release.set()
-        close_thread.join(timeout=2)
+        releaser = Thread(target=lambda: (Event().wait(0.1), release.set()))
+        releaser.start()
+        started = time.monotonic()
+        server.drain_and_close(timeout_seconds=1.0)
+        elapsed = time.monotonic() - started
+        drained = True
+        releaser.join(timeout=1)
+        serve_thread.join(timeout=1)
         request_thread.join(timeout=2)
-        assert not close_thread.is_alive()
+        assert elapsed < 1.0
+        assert not serve_thread.is_alive()
         assert not request_thread.is_alive()
     finally:
         release.set()
-        server.server_close()
+        if not drained:
+            server.shutdown()
+            server.server_close()
         serve_thread.join(timeout=2)
         request_thread.join(timeout=2)
 
@@ -364,6 +366,54 @@ def test_cli_prints_only_readiness_and_shuts_down_cleanly_on_sigterm() -> None:
         assert token not in rendered
         assert rendered.strip() == readiness
     finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=2)
+
+
+def test_cli_sigterm_closes_idle_pre_request_socket_within_bound() -> None:
+    repository_root = Path(__file__).resolve().parents[2]
+    environment = {
+        **os.environ,
+        "GUARDIAN_LOCAL_TOKENS_JSON": '{"opaque-a":"tenant-a"}',
+    }
+    process = subprocess.Popen(
+        [sys.executable, "-m", "apps.guardian_api", "--port", "0"],
+        cwd=repository_root,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    idle_socket: socket.socket | None = None
+    try:
+        assert process.stdout is not None
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ)
+        assert selector.select(timeout=5), "Guardian CLI did not become ready"
+        readiness = urlsplit(process.stdout.readline().strip())
+        selector.close()
+
+        idle_socket = socket.create_connection(
+            (readiness.hostname or "127.0.0.1", readiness.port or 0), timeout=1
+        )
+        idle_socket.sendall(b"G")
+        Event().wait(0.1)
+
+        started = time.monotonic()
+        process.terminate()
+        assert process.wait(timeout=3) == 0
+        assert time.monotonic() - started < 3
+
+        idle_socket.settimeout(1)
+        try:
+            remaining = idle_socket.recv(1)
+        except ConnectionResetError:
+            remaining = b""
+        assert remaining == b""
+    finally:
+        if idle_socket is not None:
+            idle_socket.close()
         if process.poll() is None:
             process.kill()
             process.wait(timeout=2)

@@ -144,10 +144,13 @@ def run_runtime(
         stopped.set()
         if server is not None:
             if thread_started:
-                server.shutdown()
-            server.server_close()
-        if thread is not None and thread_started:
-            thread.join()
+                server.drain_and_close()
+            else:
+                server.server_close()
+        if thread is not None and thread_started and server is not None:
+            thread.join(timeout=server.drain_timeout)
+            if thread.is_alive():
+                raise RuntimeError("Guardian server thread did not stop within bound")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

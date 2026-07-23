@@ -206,6 +206,25 @@ def test_secrets_are_not_echoed_or_logged(caplog: pytest.LogCaptureFixture) -> N
     assert "opaque-a" not in rendered
 
 
+def test_attacker_controlled_method_is_normalized_in_structured_logs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    attacker_method = "TOKEN-do-not-disclose"
+    caplog.set_level(logging.INFO, logger="guardian.http")
+    with running_server() as server:
+        response, _ = request(server, attacker_method, "/health")
+
+    method_fields = [
+        cast(str, getattr(record, "http_method"))
+        for record in caplog.records
+        if hasattr(record, "http_method")
+    ]
+    assert response.status == 405
+    assert method_fields
+    assert set(method_fields) == {"unsupported"}
+    assert attacker_method not in method_fields
+
+
 def test_internal_errors_return_a_safe_500(caplog: pytest.LogCaptureFixture) -> None:
     class ExplodingService(GuardianService):
         def get_incident(self, authenticated_tenant: str, incident_id: str):
