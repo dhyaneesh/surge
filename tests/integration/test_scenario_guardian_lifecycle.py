@@ -32,6 +32,8 @@ from testbeds.models import (
     ObservedServiceIdentity,
     WorkloadState,
 )
+from testbeds.evidence.collector import EvidenceSample
+from testbeds.evidence.contracts import EvidenceSourceKind
 from testbeds.scenarios.facts import (
     ControlStimulus,
     FactBuildContext,
@@ -64,6 +66,21 @@ def _service() -> EnvironmentState:
     )
 
 
+def _telemetry_sample(observed_at: datetime) -> EvidenceSample:
+    return EvidenceSample(
+        EvidenceSourceKind.SIGNOZ_TELEMETRY,
+        observed_at=observed_at,
+        provenance_ref="signoz/telemetry-quality",
+        values={
+            "quality": 1.0,
+            "usable_samples": 10,
+            "required_samples": 10,
+            "pipeline_available": True,
+            "comparison_valid": True,
+        },
+    )
+
+
 def _facts(*, control=ControlStimulus(), tenant_id="tenant-a") -> IncidentSubmission:
     observed_at = datetime.now(UTC)
     return build_incident_submission(
@@ -76,6 +93,8 @@ def _facts(*, control=ControlStimulus(), tenant_id="tenant-a") -> IncidentSubmis
             observed_at=observed_at,
             observations=(_service(),),
             control=control,
+            evidence_samples=(_telemetry_sample(observed_at),),
+            required_signals=frozenset({"telemetry_quality"}),
         )
     )
 

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from testbeds.scenarios.compatibility import CompatibilityStatus, derive_compatibility
 from testbeds.scenarios.execution import (
+    EnvironmentInvalidatedError,
     ExecutionSettings,
     ExecutionStatus,
     ScenarioExecutor,
@@ -32,6 +33,9 @@ class SuiteSummary:
     failed: int
     skipped: int
     skip_reasons: tuple[str, ...]
+    reset_completed: bool = True
+    cleanup_completed: bool = True
+    environment_invalidated: bool = False
 
 
 def select_scenarios(
@@ -76,7 +80,10 @@ async def run_environment(
         summary = SuiteSummary(environment, 0, 0, 0, 0, len(skip_reasons), skip_reasons)
         _write_summary(artifact_root, summary)
         return summary
-    passed = failed = 0
+    passed = failed = executed = 0
+    reset_completed = True
+    cleanup_completed = True
+    environment_invalidated = False
     for index, path in enumerate(selected, start=1):
         scenario = load_guardian_scenario(path)
         registration = build_adapter_registration(
@@ -84,11 +91,36 @@ async def run_environment(
             workspace=artifact_root / "workspaces" / scenario.metadata.name,
             run_id=f"{index}-{scenario.metadata.name}",
         )
-        result = await ScenarioExecutor(HttpGuardianClient(guardian_url)).execute(
-            scenario,
-            registration,
-            ExecutionSettings(artifact_root / "executions"),
-        )
+        try:
+            result = await ScenarioExecutor(HttpGuardianClient(guardian_url)).execute(
+                scenario,
+                registration,
+                ExecutionSettings(artifact_root / "executions"),
+            )
+        except EnvironmentInvalidatedError as exc:
+            result = exc.result
+            environment_invalidated = True
+            reset_completed = reset_completed and result.reset_completed
+            cleanup_completed = cleanup_completed and result.cleanup_completed
+            executed += 1
+            failed += 1
+            summary = SuiteSummary(
+                environment,
+                len(selected),
+                executed,
+                passed,
+                failed,
+                len(skip_reasons),
+                skip_reasons,
+                reset_completed=reset_completed,
+                cleanup_completed=cleanup_completed,
+                environment_invalidated=True,
+            )
+            _write_summary(artifact_root, summary)
+            return summary
+        executed += 1
+        reset_completed = reset_completed and result.reset_completed
+        cleanup_completed = cleanup_completed and result.cleanup_completed
         if result.status is ExecutionStatus.PASSED:
             passed += 1
         else:
@@ -96,11 +128,14 @@ async def run_environment(
     summary = SuiteSummary(
         environment,
         len(selected),
-        len(selected),
+        executed,
         passed,
         failed,
         len(skip_reasons),
         skip_reasons,
+        reset_completed=reset_completed,
+        cleanup_completed=cleanup_completed,
+        environment_invalidated=environment_invalidated,
     )
     _write_summary(artifact_root, summary)
     return summary
@@ -134,6 +169,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     for reason in summary.skip_reasons:
         print(f"skip: {reason}")
+    if summary.environment_invalidated:
+        return 1
     if summary.executed == 0:
         return 1
     return 1 if summary.failed else 0

@@ -8,7 +8,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-from testbeds.scenarios.environment_suite import run_environment, select_scenarios
+from testbeds.scenarios.environment_suite import (
+    SuiteSummary,
+    run_environment,
+    select_scenarios,
+)
 from testbeds.scenarios.loader import load_guardian_scenario
 from testbeds.scenarios.registry import SUPPORTED_ENVIRONMENTS
 from testbeds.scenarios.v1alpha2 import GuardianScenarioV1Alpha2
@@ -20,17 +24,33 @@ async def run_matrix(
     artifact_root.mkdir(parents=True, exist_ok=True)
     environment_summaries = []
     selected_paths: set[Path] = set()
+    stopped_early = False
     for environment in SUPPORTED_ENVIRONMENTS:
+        if stopped_early:
+            environment_summaries.append(
+                SuiteSummary(
+                    environment,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    ("skipped: prior environment invalidated",),
+                    environment_invalidated=True,
+                )
+            )
+            continue
         selected, _ = select_scenarios(environment, scenario_directory)
         selected_paths.update(selected)
-        environment_summaries.append(
-            await run_environment(
-                environment,
-                guardian_url=guardian_url,
-                artifact_root=artifact_root / environment,
-                scenario_directory=scenario_directory,
-            )
+        environment_summary = await run_environment(
+            environment,
+            guardian_url=guardian_url,
+            artifact_root=artifact_root / environment,
+            scenario_directory=scenario_directory,
         )
+        environment_summaries.append(environment_summary)
+        if environment_summary.environment_invalidated:
+            stopped_early = True
     summary: dict[str, Any] = {
         "schemaVersion": "guardian.scenario-matrix/v1",
         "environments": [item.environment for item in environment_summaries],
@@ -39,6 +59,9 @@ async def run_matrix(
         "passed": sum(item.passed for item in environment_summaries),
         "failed": sum(item.failed for item in environment_summaries),
         "skipped": sum(item.skipped for item in environment_summaries),
+        "environmentInvalidated": any(
+            item.environment_invalidated for item in environment_summaries
+        ),
         "emptyEnvironments": [
             item.environment for item in environment_summaries if item.executed == 0
         ],

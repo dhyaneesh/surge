@@ -1,20 +1,22 @@
-"""Testbed-to-production normalization of adapter evidence into Guardian facts.
+"""Testbed-to-production normalization of collector evidence into Guardian facts.
 
 This module is the only scenario-aware normalization boundary. It converts
-successful adapter operation results and independently observed environment
-state into the strict ``guardian.incident-facts/v1`` schema consumed by the
-production Guardian API.
+independently sampled collector evidence and typed control fixtures into the
+strict ``guardian.incident-facts/v1`` schema consumed by the production
+Guardian API.
 
 It never imports production decision logic, never accepts scenario identifiers,
 expected assertions, raw stimulus magnitudes, secrets, or demo-specific service
 names as incident evidence. Missing required evidence fails closed.
+``EnvironmentState.healthy``, successful load injection, and successful fault
+injection are never treated as telemetry or symptom proof.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Mapping
+from typing import Mapping, Sequence
 
 from apps.guardian_api.models import (
     BooleanEvidence,
@@ -36,6 +38,8 @@ from apps.guardian_api.models import (
     TelemetryFacts,
     VersionEvidence,
 )
+from testbeds.evidence.collector import EvidenceSample, UnavailableEvidence
+from testbeds.evidence.contracts import EvidenceSourceKind
 from testbeds.models import (
     DeploymentEvent,
     EnvironmentRelease,
@@ -43,9 +47,7 @@ from testbeds.models import (
     FaultExecution,
     LoadExecution,
     ObservedServiceIdentity,
-    RolloutState,
     ScalingState,
-    WorkloadState,
 )
 
 
@@ -62,10 +64,26 @@ class MissingEvidenceError(FactNormalizationError):
 
 
 _WORKLOAD_KIND = "Deployment"
-_HEALTHY_QUALITY = 1.0
-_UNHEALTHY_QUALITY = 0.0
 _SAMPLE_BUDGET = 10
 _CONTROL_PROVENANCE = "test-control"
+
+_SIGNAL_SOURCE: dict[str, EvidenceSource] = {
+    "request_rate": EvidenceSource.QUERY_CONTRACT,
+    "cpu_utilization": EvidenceSource.QUERY_CONTRACT,
+    "memory_utilization": EvidenceSource.QUERY_CONTRACT,
+    "error_rate": EvidenceSource.QUERY_CONTRACT,
+    "p95_latency_ms": EvidenceSource.QUERY_CONTRACT,
+    "restart_delta": EvidenceSource.ADAPTER_OBSERVATION,
+    "topology_edge": EvidenceSource.ADAPTER_OBSERVATION,
+    "dependency_healthy": EvidenceSource.ADAPTER_OBSERVATION,
+    "deployment_version": EvidenceSource.ADAPTER_OBSERVATION,
+}
+
+_NUMERIC_BASELINE_KEYS = {
+    "request_rate": "baseline_request_rate",
+    "error_rate": "baseline_error_rate",
+    "p95_latency_ms": "baseline_p95_latency_ms",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +117,8 @@ class FactBuildContext:
     control: ControlStimulus = field(default_factory=ControlStimulus)
     severity: str = IncidentSeverity.WARNING.value
     freshness_seconds: int = 60
+    evidence_samples: tuple[EvidenceSample | UnavailableEvidence, ...] = ()
+    required_signals: frozenset[str] = frozenset({"telemetry_quality"})
 
 
 def _require_tenant(tenant_id: str) -> str:
@@ -132,13 +152,6 @@ def _find_service(
     return None
 
 
-def _find_workload(observation: EnvironmentState, bound: str) -> WorkloadState | None:
-    for candidate in observation.workloads:
-        if candidate.name == bound or candidate.role == bound:
-            return candidate
-    return None
-
-
 def _resolve_identity(ctx: FactBuildContext) -> TargetIdentity:
     observation = _latest_observation(ctx)
     bound = _bound_service(ctx)
@@ -161,6 +174,7 @@ def _resolve_identity(ctx: FactBuildContext) -> TargetIdentity:
 
 def _evidence_common(
     ctx: FactBuildContext,
+    identity: TargetIdentity,
     *,
     subject_role: str,
     observed_at: datetime,
@@ -168,111 +182,326 @@ def _evidence_common(
     provenance_ref: str,
     independence_group: str,
     usable: int,
+    expected: int = _SAMPLE_BUDGET,
 ) -> dict:
     return {
         "tenant_id": ctx.tenant_id,
         "subject_role": subject_role,
-        "environment": ctx.environment,
-        "namespace": _latest_observation(ctx).namespace or ctx.environment,
-        "workload_kind": _WORKLOAD_KIND,
-        "workload_name": subject_role,
-        "service_name": subject_role,
+        "environment": identity.environment,
+        "namespace": identity.namespace,
+        "workload_kind": identity.workload_kind,
+        "workload_name": identity.workload_name,
+        "service_name": identity.service_name,
         "observed_at": observed_at,
         "freshness": EvidenceFreshness.FRESH,
         "source": source,
         "provenance_ref": provenance_ref,
         "independence_group": independence_group,
-        "expected_samples": _SAMPLE_BUDGET,
+        "expected_samples": expected,
         "usable_samples": usable,
     }
 
 
+def _usable_from_values(
+    values: Mapping[str, object], default: int = _SAMPLE_BUDGET
+) -> int:
+    raw = values.get("usable_samples", default)
+    try:
+        return int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
+def _expected_from_values(
+    values: Mapping[str, object], default: int = _SAMPLE_BUDGET
+) -> int:
+    raw = values.get("required_samples", default)
+    try:
+        return int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
+def _samples_of_kind(
+    samples: Sequence[EvidenceSample | UnavailableEvidence], kind: EvidenceSourceKind
+) -> list[EvidenceSample | UnavailableEvidence]:
+    return [item for item in samples if item.source_kind is kind]
+
+
+def _first_sample(
+    samples: Sequence[EvidenceSample | UnavailableEvidence], kind: EvidenceSourceKind
+) -> EvidenceSample | UnavailableEvidence | None:
+    matched = _samples_of_kind(samples, kind)
+    return matched[0] if matched else None
+
+
+def _require_sample(
+    samples: Sequence[EvidenceSample | UnavailableEvidence],
+    kind: EvidenceSourceKind,
+    *,
+    label: str,
+) -> EvidenceSample:
+    matched = _first_sample(samples, kind)
+    if matched is None:
+        raise MissingEvidenceError(f"required {label} evidence is missing")
+    if isinstance(matched, UnavailableEvidence):
+        raise MissingEvidenceError(f"required {label} evidence is unavailable")
+    return matched
+
+
 def _build_telemetry(ctx: FactBuildContext) -> TelemetryFacts:
-    observation = _latest_observation(ctx)
-    mode = ctx.control.telemetry_mode
     observed_at = _aware(ctx.observed_at)
-    quality = _HEALTHY_QUALITY if observation.healthy else _UNHEALTHY_QUALITY
-    pipeline_available = observation.healthy
-    comparison_valid = observation.healthy
-    usable = _SAMPLE_BUDGET if observation.healthy else 0
+    mode = ctx.control.telemetry_mode
     newest = observed_at
     if mode in {"interrupted", "unavailable"}:
-        quality = _UNHEALTHY_QUALITY
-        pipeline_available = False
-        usable = 0
-    elif mode == "incomplete":
-        quality = 0.70
-        usable = 0
-        comparison_valid = False
-    elif mode == "stale":
+        return TelemetryFacts(
+            quality=0.0,
+            newest_required_sample_at=newest,
+            freshness_seconds=ctx.freshness_seconds,
+            required_signals=frozenset({RequiredSignal.TELEMETRY_QUALITY}),
+            clock_skew_seconds=0.0,
+            required_sample_count=_SAMPLE_BUDGET,
+            usable_sample_count=0,
+            pipeline_available=False,
+            comparison_valid=False,
+            identity_conflict=False,
+        )
+    if mode == "incomplete":
+        return TelemetryFacts(
+            quality=0.70,
+            newest_required_sample_at=newest,
+            freshness_seconds=ctx.freshness_seconds,
+            required_signals=frozenset({RequiredSignal.TELEMETRY_QUALITY}),
+            clock_skew_seconds=0.0,
+            required_sample_count=_SAMPLE_BUDGET,
+            usable_sample_count=0,
+            pipeline_available=True,
+            comparison_valid=False,
+            identity_conflict=False,
+        )
+    if mode == "stale":
         newest = observed_at - timedelta(seconds=2 * ctx.freshness_seconds + 10)
-    return TelemetryFacts(
-        quality=quality,
-        newest_required_sample_at=newest,
-        freshness_seconds=ctx.freshness_seconds,
-        required_signals=frozenset({RequiredSignal.TELEMETRY_QUALITY}),
-        clock_skew_seconds=0.0,
-        required_sample_count=_SAMPLE_BUDGET,
-        usable_sample_count=usable,
-        pipeline_available=pipeline_available,
-        comparison_valid=comparison_valid,
-        identity_conflict=False,
+        sample = _require_sample(
+            ctx.evidence_samples,
+            EvidenceSourceKind.SIGNOZ_TELEMETRY,
+            label="telemetry",
+        )
+        values = sample.values
+        quality = float(values.get("quality", 1.0))
+        usable = _usable_from_values(values)
+        required = _expected_from_values(values)
+        return TelemetryFacts(
+            quality=quality,
+            newest_required_sample_at=newest,
+            freshness_seconds=ctx.freshness_seconds,
+            required_signals=frozenset({RequiredSignal.TELEMETRY_QUALITY}),
+            clock_skew_seconds=0.0,
+            required_sample_count=required,
+            usable_sample_count=usable,
+            pipeline_available=bool(values.get("pipeline_available", True)),
+            comparison_valid=bool(values.get("comparison_valid", True)),
+            identity_conflict=False,
+        )
+
+    if "telemetry_quality" in ctx.required_signals or not ctx.control.telemetry_mode:
+        sample = _require_sample(
+            ctx.evidence_samples,
+            EvidenceSourceKind.SIGNOZ_TELEMETRY,
+            label="telemetry",
+        )
+        values = sample.values
+        quality = float(values["quality"])
+        usable = _usable_from_values(values)
+        required = _expected_from_values(values)
+        return TelemetryFacts(
+            quality=quality,
+            newest_required_sample_at=_aware(sample.observed_at),
+            freshness_seconds=ctx.freshness_seconds,
+            required_signals=frozenset({RequiredSignal.TELEMETRY_QUALITY}),
+            clock_skew_seconds=0.0,
+            required_sample_count=required,
+            usable_sample_count=usable,
+            pipeline_available=bool(values.get("pipeline_available", quality >= 0.80)),
+            comparison_valid=bool(
+                values.get("comparison_valid", quality >= 0.80 and usable > 0)
+            ),
+            identity_conflict=False,
+        )
+    raise MissingEvidenceError("required telemetry evidence is missing")
+
+
+def _merged_sample_values(
+    samples: Sequence[EvidenceSample | UnavailableEvidence],
+) -> list[tuple[EvidenceSample, Mapping[str, object]]]:
+    output: list[tuple[EvidenceSample, Mapping[str, object]]] = []
+    for item in samples:
+        if isinstance(item, EvidenceSample):
+            output.append((item, item.values))
+    return output
+
+
+def _find_value(
+    samples: Sequence[EvidenceSample | UnavailableEvidence], key: str
+) -> tuple[EvidenceSample, object] | None:
+    for sample, values in _merged_sample_values(samples):
+        if key in values:
+            return sample, values[key]
+    return None
+
+
+def _numeric_from_samples(
+    ctx: FactBuildContext,
+    identity: TargetIdentity,
+    *,
+    signal_name: str,
+    value_key: str,
+    group: str,
+) -> NumericEvidence | None:
+    found = _find_value(ctx.evidence_samples, value_key)
+    if found is None:
+        return None
+    sample, raw = found
+    baseline_key = _NUMERIC_BASELINE_KEYS.get(signal_name)
+    baseline = None
+    if baseline_key is not None:
+        baseline_raw = sample.values.get(baseline_key)
+        if baseline_raw is not None:
+            baseline = float(baseline_raw)  # type: ignore[arg-type]
+    usable = _usable_from_values(sample.values)
+    expected = _expected_from_values(sample.values)
+    common = _evidence_common(
+        ctx,
+        identity,
+        subject_role=ctx.target_role,
+        observed_at=_aware(sample.observed_at),
+        source=_SIGNAL_SOURCE[signal_name],
+        provenance_ref=sample.provenance_ref,
+        independence_group=group,
+        usable=usable,
+        expected=expected,
     )
+    return NumericEvidence(
+        **common,
+        value=float(raw),  # type: ignore[arg-type]
+        baseline_value=baseline,
+    )
+
+
+def _boolean_from_samples(
+    ctx: FactBuildContext,
+    identity: TargetIdentity,
+    *,
+    signal_name: str,
+    value_key: str,
+    group: str,
+    subject_role: str | None = None,
+) -> BooleanEvidence | None:
+    found = _find_value(ctx.evidence_samples, value_key)
+    if found is None:
+        return None
+    sample, raw = found
+    usable = _usable_from_values(sample.values)
+    expected = _expected_from_values(sample.values)
+    role = subject_role or ctx.target_role
+    common = _evidence_common(
+        ctx,
+        identity,
+        subject_role=role,
+        observed_at=_aware(sample.observed_at),
+        source=_SIGNAL_SOURCE[signal_name],
+        provenance_ref=sample.provenance_ref,
+        independence_group=group,
+        usable=usable,
+        expected=expected,
+    )
+    return BooleanEvidence(**common, value=bool(raw))
 
 
 def _deployment_version_evidence(
     ctx: FactBuildContext, identity: TargetIdentity
 ) -> VersionEvidence | None:
-    if len(ctx.observations) < 2:
+    found_digest = _find_value(ctx.evidence_samples, "current_digest")
+    if found_digest is None:
         return None
-    first = _find_service(ctx.observations[0], identity.service_name)
-    last = _find_service(ctx.observations[-1], identity.service_name)
-    if first is None or last is None:
+    sample, current_digest = found_digest
+    previous_digest = sample.values.get("previous_digest")
+    if previous_digest is None or current_digest is None:
         return None
-    if not first.image_digest or not last.image_digest:
-        return None
-    if first.image_digest == last.image_digest:
-        return None
+    usable = _usable_from_values(sample.values)
+    expected = _expected_from_values(sample.values)
     common = _evidence_common(
         ctx,
+        identity,
         subject_role=ctx.target_role,
-        observed_at=_aware(ctx.observed_at),
+        observed_at=_aware(sample.observed_at),
         source=EvidenceSource.ADAPTER_OBSERVATION,
-        provenance_ref="adapter-observation/version-transition",
+        provenance_ref=sample.provenance_ref,
         independence_group="deployment-version-transition",
-        usable=_SAMPLE_BUDGET,
+        usable=usable,
+        expected=expected,
     )
+    previous_version = sample.values.get("previous_service_version")
+    current_version = sample.values.get("current_service_version")
     return VersionEvidence(
         **common,
-        previous_service_version=first.version,
-        current_service_version=last.version,
-        previous_digest=first.image_digest,
-        current_digest=last.image_digest,
+        previous_service_version=(
+            str(previous_version) if previous_version is not None else None
+        ),
+        current_service_version=(
+            str(current_version) if current_version is not None else None
+        ),
+        previous_digest=str(previous_digest),
+        current_digest=str(current_digest),
     )
 
 
-def _dependency_health_evidence(ctx: FactBuildContext) -> BooleanEvidence | None:
-    observation = _latest_observation(ctx)
-    bound = _bound_service(ctx)
-    dependency: RolloutState | None = None
-    for rollout in observation.rollouts:
-        if rollout.name == bound:
-            continue
-        dependency = rollout
-        break
-    if dependency is None:
-        return None
-    common = _evidence_common(
-        ctx,
-        subject_role="dependency",
-        observed_at=_aware(ctx.observed_at),
-        source=EvidenceSource.ADAPTER_OBSERVATION,
-        provenance_ref=f"adapter-observation/rollout/{dependency.name}",
-        independence_group=f"dependency-{dependency.name}",
-        usable=_SAMPLE_BUDGET,
+def _build_signals(ctx: FactBuildContext, identity: TargetIdentity) -> SignalFacts:
+    kwargs: dict = {}
+    builders = (
+        ("request_rate", "request_rate", "load", "numeric"),
+        ("cpu_utilization", "cpu_utilization", "util", "numeric"),
+        ("memory_utilization", "memory_utilization", "util", "numeric"),
+        ("error_rate", "error_rate", "errors", "numeric"),
+        ("p95_latency_ms", "p95_latency_ms", "latency", "numeric"),
+        ("restart_delta", "restart_delta", "pressure", "numeric"),
+        ("topology_edge", "topology_edge", "topology", "boolean"),
+        ("dependency_healthy", "dependency_healthy", "dependency", "dependency"),
+        ("deployment_version", "deployment_version", "deployment", "version"),
     )
-    healthy = bool(dependency.recovery_healthy) and dependency.unavailable_replicas == 0
-    return BooleanEvidence(**common, value=healthy)
+    for signal_name, value_key, group, kind in builders:
+        evidence = None
+        if kind == "numeric":
+            evidence = _numeric_from_samples(
+                ctx,
+                identity,
+                signal_name=signal_name,
+                value_key=value_key,
+                group=group,
+            )
+        elif kind == "boolean":
+            evidence = _boolean_from_samples(
+                ctx,
+                identity,
+                signal_name=signal_name,
+                value_key=value_key,
+                group=group,
+            )
+        elif kind == "dependency":
+            evidence = _boolean_from_samples(
+                ctx,
+                identity,
+                signal_name=signal_name,
+                value_key=value_key,
+                group=group,
+                subject_role="dependency",
+            )
+        elif kind == "version":
+            evidence = _deployment_version_evidence(ctx, identity)
+        if evidence is not None:
+            kwargs[signal_name] = evidence
+        elif signal_name in ctx.required_signals:
+            raise MissingEvidenceError(f"required {signal_name} evidence is missing")
+    return SignalFacts(**kwargs)
 
 
 def _scaler_facts(ctx: FactBuildContext) -> ScalerFacts | None:
@@ -333,6 +562,7 @@ def _foreign_evidence(
         return None
     common = _evidence_common(
         ctx,
+        identity,
         subject_role=ctx.target_role,
         observed_at=_aware(ctx.observed_at),
         source=EvidenceSource.QUERY_CONTRACT,
@@ -350,30 +580,27 @@ def _foreign_evidence(
 
 
 def build_incident_submission(ctx: FactBuildContext) -> IncidentSubmission:
-    """Normalize adapter evidence into a strict incident submission.
+    """Normalize collector evidence into a strict incident submission.
 
     The returned facts never carry a scenario identifier, expected assertions,
     raw stimulus magnitudes, secrets, or demo-specific service names. Evidence
-    originates only from successful adapter operation results and independently
-    observed environment state.
+    originates only from independently sampled collector results and typed
+    control fixtures. Healthy adapter state and successful load/fault results
+    are never treated as symptom proof.
     """
 
     _require_tenant(ctx.tenant_id)
     _aware(ctx.observed_at)
+    # Successful control results are deliberately unused as symptom evidence.
+    _ = ctx.load_result
+    _ = ctx.fault_result
     identity = _resolve_identity(ctx)
     telemetry = _build_telemetry(ctx)
-    deployment_version = _deployment_version_evidence(ctx, identity)
-    dependency_healthy = _dependency_health_evidence(ctx)
-    scaler = _scaler_facts(ctx)
+    signals = _build_signals(ctx, identity)
     foreign = _foreign_evidence(ctx, identity)
-    signals_kwargs: dict = {}
-    if deployment_version is not None:
-        signals_kwargs["deployment_version"] = deployment_version
-    if dependency_healthy is not None:
-        signals_kwargs["dependency_healthy"] = dependency_healthy
     if foreign is not None:
-        signals_kwargs["request_rate"] = foreign
-    signals = SignalFacts(**signals_kwargs)
+        signals = signals.model_copy(update={"request_rate": foreign})
+    scaler = _scaler_facts(ctx)
     policy = _policy_facts(ctx)
     control = _control_facts(ctx)
     evidence_pass = EvidencePass(completed_passes=1, started_at=_aware(ctx.observed_at))
@@ -402,11 +629,13 @@ def build_observation_update(
     observed_at: datetime,
     window_started_at: datetime,
     observation_state: EnvironmentState,
+    evidence_samples: Sequence[EvidenceSample | UnavailableEvidence] = (),
 ) -> ObservationUpdate:
     """Normalize a fresh post-reset observation window into an update.
 
     Recovery may be evaluated only from a window that starts at or after the
-    reset point and does not predate the observation timestamp.
+    reset point and does not predate the observation timestamp. Telemetry
+    quality must come from collector samples, never from ``healthy`` flags.
     """
 
     _require_tenant(ctx.tenant_id)
@@ -416,33 +645,23 @@ def build_observation_update(
         raise FactNormalizationError(
             "observation window cannot start after the observation timestamp"
         )
-    identity = _resolve_identity(
-        FactBuildContext(
-            tenant_id=ctx.tenant_id,
-            environment=ctx.environment,
-            target_role=ctx.target_role,
-            role_bindings=ctx.role_bindings,
-            release=ctx.release,
-            observed_at=observed_at,
-            observations=(observation_state,),
-            control=ControlStimulus(),
-            severity=ctx.severity,
-            freshness_seconds=ctx.freshness_seconds,
-        )
-    )
-    healthy = bool(observation_state.healthy) and bool(observation_state.services)
-    telemetry = TelemetryFacts(
-        quality=_HEALTHY_QUALITY if healthy else _UNHEALTHY_QUALITY,
-        newest_required_sample_at=observed_at,
+    recovery_ctx = FactBuildContext(
+        tenant_id=ctx.tenant_id,
+        environment=ctx.environment,
+        target_role=ctx.target_role,
+        role_bindings=ctx.role_bindings,
+        release=ctx.release,
+        observed_at=observed_at,
+        observations=(observation_state,),
+        control=ControlStimulus(),
+        severity=ctx.severity,
         freshness_seconds=ctx.freshness_seconds,
-        required_signals=frozenset({RequiredSignal.TELEMETRY_QUALITY}),
-        clock_skew_seconds=0.0,
-        required_sample_count=_SAMPLE_BUDGET,
-        usable_sample_count=_SAMPLE_BUDGET if healthy else 0,
-        pipeline_available=healthy,
-        comparison_valid=healthy,
-        identity_conflict=False,
+        evidence_samples=tuple(evidence_samples),
+        required_signals=frozenset({"telemetry_quality"}),
     )
+    identity = _resolve_identity(recovery_ctx)
+    telemetry = _build_telemetry(recovery_ctx)
+    healthy = bool(observation_state.services) and telemetry.quality >= 0.80
     del identity
     return ObservationUpdate(
         tenant_id=ctx.tenant_id,
