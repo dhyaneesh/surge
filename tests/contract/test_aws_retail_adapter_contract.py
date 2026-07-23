@@ -72,6 +72,7 @@ def test_real_cluster_install_baseline_fault_reset_and_cleanup(tmp_path):
             await adapter.install(AWS_RETAIL_ENVIRONMENT.release())
             baseline = await adapter.wait_for_healthy_baseline(timedelta(minutes=15))
             assert baseline.healthy
+            assert baseline.environment is not None
             original = {
                 item.name: (item.desired_replicas, item.image)
                 for item in baseline.environment.workloads
@@ -160,6 +161,7 @@ def test_real_cluster_install_baseline_fault_reset_and_cleanup(tmp_path):
                     timedelta(minutes=10)
                 )
                 assert restored.healthy
+                assert restored.environment is not None
                 assert {
                     item.name: (item.desired_replicas, item.image)
                     for item in restored.environment.workloads
@@ -192,6 +194,7 @@ def test_real_cluster_install_baseline_fault_reset_and_cleanup(tmp_path):
             await adapter.reset()
             restored = await adapter.wait_for_healthy_baseline(timedelta(minutes=10))
             assert restored.healthy
+            assert restored.environment is not None
             assert {
                 item.name: (item.desired_replicas, item.image)
                 for item in restored.environment.workloads
@@ -295,10 +298,13 @@ def test_real_cluster_partial_failure_reset_and_cleanup(tmp_path):
                     FaultType.HIGH_CPU, WorkloadSelector("database"), 0.25
                 )
             )
-            runner.predicate = lambda argv: argv[:3] == (
-                "kubectl",
-                "get",
-                "deployments",
+            runner.predicate = lambda argv: (
+                argv[:3]
+                == (
+                    "kubectl",
+                    "get",
+                    "deployments",
+                )
             )
             runner.armed = True
             with pytest.raises(RuntimeError, match="injected real-cluster"):
@@ -322,10 +328,13 @@ def test_real_cluster_partial_failure_reset_and_cleanup(tmp_path):
                 await adapter.wait_for_healthy_baseline(timedelta(minutes=10))
             ).healthy
 
-            runner.predicate = lambda argv: argv[:3] == (
-                "kubectl",
-                "rollout",
-                "status",
+            runner.predicate = lambda argv: (
+                argv[:3]
+                == (
+                    "kubectl",
+                    "rollout",
+                    "status",
+                )
             )
             runner.armed = True
             with pytest.raises(RuntimeError, match="injected real-cluster"):

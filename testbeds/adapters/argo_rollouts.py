@@ -159,9 +159,15 @@ class ArgoRolloutsDemoAdapter:
 
     @staticmethod
     def _pin_images(manifest: str) -> str:
-        return manifest.replace(
+        pinned = manifest.replace(
             "argoproj/rollouts-demo:blue", ARGO_ROLLOUTS_ENVIRONMENT.stable_image
         )
+        images = re.findall(r"^\s*image:\s*(\S+)\s*$", pinned, re.MULTILINE)
+        if not images or any("@sha256:" not in image for image in images):
+            raise RuntimeError(
+                "rendered Argo Rollouts fixture contains an unpinned image"
+            )
+        return pinned
 
     async def observe_state(self) -> EnvironmentState:
         try:
@@ -239,6 +245,8 @@ class ArgoRolloutsDemoAdapter:
                 contaminated=self.contaminated,
                 changed_resources=tuple(self._changed),
                 diagnostics=tuple(self._diagnostics),
+                available_endpoints=frozenset(endpoint_names),
+                pods_ready=pods_ready,
             )
         except Exception as error:
             await self._capture_diagnostics("observe", error)
@@ -369,7 +377,9 @@ class ArgoRolloutsDemoAdapter:
                 "ReplicaSet status",
             ),
             BaselineCheck(
-                "service_available", state.healthy, "Kubernetes services and endpoints"
+                "service_available",
+                _PREVIEW_SERVICE in state.available_endpoints,
+                "Kubernetes endpoints",
             ),
             BaselineCheck(
                 "expected_version",

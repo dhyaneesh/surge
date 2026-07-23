@@ -10,6 +10,7 @@ from pathlib import Path
 from testbeds.adapters.command_runner import (
     AllowlistedCommandRunner,
     CommandResult,
+    CommandRunner,
     redact,
 )
 from testbeds.environments.online_boutique import ONLINE_BOUTIQUE_ENVIRONMENT
@@ -69,7 +70,7 @@ class OnlineBoutiqueAdapter:
         self,
         *,
         workspace: Path,
-        runner: AllowlistedCommandRunner | None = None,
+        runner: CommandRunner | None = None,
         run_id: str | None = None,
         namespace: str | None = None,
         baseline_poll_seconds: float = 2,
@@ -145,7 +146,9 @@ class OnlineBoutiqueAdapter:
                 input_text=manifest,
             )
             self._changed.append(
-                ChangedResource("Namespace", self.namespace, self.namespace, "installed")
+                ChangedResource(
+                    "Namespace", self.namespace, self.namespace, "installed"
+                )
             )
             self._cleaned = False
             return await self.observe_state()
@@ -168,7 +171,13 @@ class OnlineBoutiqueAdapter:
             return
         self._source.parent.mkdir(parents=True, exist_ok=True)
         await self._run(
-            ["git", "clone", "--no-checkout", self._release.repository, str(self._source)],
+            [
+                "git",
+                "clone",
+                "--no-checkout",
+                self._release.repository,
+                str(self._source),
+            ],
             timeout=timedelta(minutes=5),
         )
         await self._run(
@@ -258,6 +267,8 @@ class OnlineBoutiqueAdapter:
                 contaminated=self.contaminated,
                 changed_resources=tuple(self._changed),
                 diagnostics=tuple(self._diagnostics),
+                available_endpoints=frozenset(endpoint_names),
+                pods_ready=pods_ready,
             )
         except Exception as error:
             await self._capture_diagnostics("observe", error)
@@ -278,7 +289,9 @@ class OnlineBoutiqueAdapter:
         name = metadata.get("name", "")
         self._validate_name(name, "workload name")
         containers = spec.get("template", {}).get("spec", {}).get("containers", [])
-        image = next((item.get("image") for item in containers if item.get("image")), None)
+        image = next(
+            (item.get("image") for item in containers if item.get("image")), None
+        )
         return WorkloadState(
             role=_ROLE_BY_NAME.get(name, "application-service"),
             name=name,
@@ -330,10 +343,22 @@ class OnlineBoutiqueAdapter:
             for item in state.workloads
         )
         return (
-            BaselineCheck("workloads_ready", expected <= observed and workloads_ready, "kubernetes deployments"),
-            BaselineCheck("required_endpoints", state.healthy, "kubernetes services and endpoints"),
-            BaselineCheck("pods_ready", state.healthy, "kubernetes pod conditions"),
-            BaselineCheck("stable_readiness", stable >= 2, "two consecutive observations"),
+            BaselineCheck(
+                "workloads_ready",
+                expected <= observed and workloads_ready,
+                "kubernetes deployments",
+            ),
+            BaselineCheck(
+                "required_endpoints",
+                (expected - {"loadgenerator"}) <= state.available_endpoints,
+                "kubernetes endpoints",
+            ),
+            BaselineCheck(
+                "pods_ready", state.pods_ready is True, "kubernetes pod conditions"
+            ),
+            BaselineCheck(
+                "stable_readiness", stable >= 2, "two consecutive observations"
+            ),
             BaselineCheck("faults_clear", not self._active_faults, "adapter state"),
             BaselineCheck("environment_clean", not self.contaminated, "adapter state"),
         )
@@ -358,7 +383,9 @@ class OnlineBoutiqueAdapter:
             timeout=_TIMEOUT,
         )
         self._load_active = True
-        change = ChangedResource("Deployment", "loadgenerator", self.namespace, "scaled")
+        change = ChangedResource(
+            "Deployment", "loadgenerator", self.namespace, "scaled"
+        )
         self._changed.append(change)
         return LoadExecution(profile, True, (change,))
 
@@ -366,7 +393,9 @@ class OnlineBoutiqueAdapter:
         if fault.fault_type not in self.capabilities.fault_types:
             raise ValueError(f"unsupported fault: {fault.fault_type}")
         if not 0 < fault.magnitude <= 1:
-            raise ValueError("fault magnitude must be greater than zero and at most one")
+            raise ValueError(
+                "fault magnitude must be greater than zero and at most one"
+            )
         try:
             if fault.fault_type is FaultType.DEPENDENCY_UNAVAILABLE:
                 if fault.target.role != "cache":
@@ -377,7 +406,14 @@ class OnlineBoutiqueAdapter:
                     name, original.get("spec", {}).get("replicas", 1)
                 )
                 await self._run(
-                    ["kubectl", "scale", f"deployment/{name}", "--replicas=0", "-n", self.namespace],
+                    [
+                        "kubectl",
+                        "scale",
+                        f"deployment/{name}",
+                        "--replicas=0",
+                        "-n",
+                        self.namespace,
+                    ],
                     timeout=_TIMEOUT,
                 )
             else:
@@ -412,8 +448,13 @@ class OnlineBoutiqueAdapter:
             "metadata": {"name": name, "namespace": self.namespace},
             "spec": {
                 "mode": "all",
-                "selector": {"namespaces": [self.namespace], "labelSelectors": {"app": workload}},
-                "stressors": {"cpu": {"workers": 1, "load": max(1, round(magnitude * 100))}},
+                "selector": {
+                    "namespaces": [self.namespace],
+                    "labelSelectors": {"app": workload},
+                },
+                "stressors": {
+                    "cpu": {"workers": 1, "load": max(1, round(magnitude * 100))}
+                },
                 "duration": "10m",
             },
         }
@@ -426,7 +467,10 @@ class OnlineBoutiqueAdapter:
             "spec": {
                 "action": "delay",
                 "mode": "all",
-                "selector": {"namespaces": [self.namespace], "labelSelectors": {"app": workload}},
+                "selector": {
+                    "namespaces": [self.namespace],
+                    "labelSelectors": {"app": workload},
+                },
                 "delay": {"latency": f"{max(1, round(magnitude * 1000))}ms"},
                 "duration": "10m",
             },
@@ -473,11 +517,27 @@ class OnlineBoutiqueAdapter:
             self._original_images.setdefault(target.name, target.image)
         try:
             await self._run(
-                ["kubectl", "set", "image", f"deployment/{target.name}", f"*={image}", "-n", self.namespace],
+                [
+                    "kubectl",
+                    "set",
+                    "image",
+                    f"deployment/{target.name}",
+                    f"*={image}",
+                    "-n",
+                    self.namespace,
+                ],
                 timeout=_TIMEOUT,
             )
             await self._run(
-                ["kubectl", "rollout", "status", f"deployment/{target.name}", "-n", self.namespace, "--timeout=2m"],
+                [
+                    "kubectl",
+                    "rollout",
+                    "status",
+                    f"deployment/{target.name}",
+                    "-n",
+                    self.namespace,
+                    "--timeout=2m",
+                ],
                 timeout=_TIMEOUT,
             )
         except Exception as error:
@@ -496,17 +556,40 @@ class OnlineBoutiqueAdapter:
         try:
             for kind, name in sorted(self._created_resources):
                 await self._run(
-                    ["kubectl", "delete", kind, name, "-n", self.namespace, "--ignore-not-found=true"],
+                    [
+                        "kubectl",
+                        "delete",
+                        kind,
+                        name,
+                        "-n",
+                        self.namespace,
+                        "--ignore-not-found=true",
+                    ],
                     timeout=_TIMEOUT,
                 )
             for name, replicas in sorted(self._original_replicas.items()):
                 await self._run(
-                    ["kubectl", "scale", f"deployment/{name}", f"--replicas={replicas}", "-n", self.namespace],
+                    [
+                        "kubectl",
+                        "scale",
+                        f"deployment/{name}",
+                        f"--replicas={replicas}",
+                        "-n",
+                        self.namespace,
+                    ],
                     timeout=_TIMEOUT,
                 )
             for name, image in sorted(self._original_images.items()):
                 await self._run(
-                    ["kubectl", "set", "image", f"deployment/{name}", f"*={image}", "-n", self.namespace],
+                    [
+                        "kubectl",
+                        "set",
+                        "image",
+                        f"deployment/{name}",
+                        f"*={image}",
+                        "-n",
+                        self.namespace,
+                    ],
                     timeout=_TIMEOUT,
                 )
             self._created_resources.clear()
@@ -525,7 +608,15 @@ class OnlineBoutiqueAdapter:
             return
         try:
             await self._run(
-                ["kubectl", "delete", "namespace", self.namespace, "--ignore-not-found=true", "--wait=true", "--timeout=10m"],
+                [
+                    "kubectl",
+                    "delete",
+                    "namespace",
+                    self.namespace,
+                    "--ignore-not-found=true",
+                    "--wait=true",
+                    "--timeout=10m",
+                ],
                 timeout=timedelta(minutes=11),
             )
             self._cleaned = True
@@ -548,27 +639,72 @@ class OnlineBoutiqueAdapter:
             )
         except Exception:
             self._history.append(
-                {"argv": safe, "outcome": "failed", "timeout_seconds": timeout.total_seconds()}
+                {
+                    "argv": safe,
+                    "outcome": "failed",
+                    "timeout_seconds": timeout.total_seconds(),
+                }
             )
             raise
         self._history.append(
-            {"argv": safe, "outcome": "succeeded", "returncode": result.returncode, "duration_seconds": result.duration_seconds}
+            {
+                "argv": safe,
+                "outcome": "succeeded",
+                "returncode": result.returncode,
+                "duration_seconds": result.duration_seconds,
+            }
         )
         return result
 
     async def _capture_diagnostics(self, operation: str, error: Exception) -> None:
-        directory = self._workspace / "diagnostics" / f"{operation}-{len(self._diagnostics) + 1}"
+        directory = (
+            self._workspace
+            / "diagnostics"
+            / f"{operation}-{len(self._diagnostics) + 1}"
+        )
         directory.mkdir(parents=True, exist_ok=True)
         commands = (
-            ("resources", ["kubectl", "get", "deployments,services,pods,endpoints", "-n", self.namespace, "-o", "wide"]),
-            ("events", ["kubectl", "get", "events", "-n", self.namespace, "-o", "json"]),
-            ("rollouts", ["kubectl", "get", "deployments", "-n", self.namespace, "-o", "json"]),
-            ("logs", ["kubectl", "logs", "-n", self.namespace, "-l", "app", "--all-containers=true", "--tail=100", "--limit-bytes=262144"]),
+            (
+                "resources",
+                [
+                    "kubectl",
+                    "get",
+                    "deployments,services,pods,endpoints",
+                    "-n",
+                    self.namespace,
+                    "-o",
+                    "wide",
+                ],
+            ),
+            (
+                "events",
+                ["kubectl", "get", "events", "-n", self.namespace, "-o", "json"],
+            ),
+            (
+                "rollouts",
+                ["kubectl", "get", "deployments", "-n", self.namespace, "-o", "json"],
+            ),
+            (
+                "logs",
+                [
+                    "kubectl",
+                    "logs",
+                    "-n",
+                    self.namespace,
+                    "-l",
+                    "app",
+                    "--all-containers=true",
+                    "--tail=100",
+                    "--limit-bytes=262144",
+                ],
+            ),
         )
         for category, argv in commands:
             try:
                 result = await self._runner.run(argv, timeout=_TIMEOUT)
-                content = result.stdout[-262144:] + (("\nSTDERR:\n" + result.stderr[-32768:]) if result.stderr else "")
+                content = result.stdout[-262144:] + (
+                    ("\nSTDERR:\n" + result.stderr[-32768:]) if result.stderr else ""
+                )
             except Exception as diagnostic_error:
                 content = f"diagnostic collection failed: {diagnostic_error}"
             path = directory / f"{category}.txt"
@@ -598,7 +734,9 @@ class OnlineBoutiqueAdapter:
             ),
             encoding="utf-8",
         )
-        self._diagnostics.append(DiagnosticArtifactReference("adapter-state", str(state_path)))
+        self._diagnostics.append(
+            DiagnosticArtifactReference("adapter-state", str(state_path))
+        )
 
     @staticmethod
     def _image_version(image: str | None) -> str | None:

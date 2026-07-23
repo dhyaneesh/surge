@@ -10,6 +10,7 @@ from pathlib import Path
 from testbeds.adapters.command_runner import (
     AllowlistedCommandRunner,
     CommandResult,
+    CommandRunner,
     redact,
 )
 from testbeds.environments.aws_retail import AWS_RETAIL_ENVIRONMENT
@@ -65,7 +66,7 @@ class AwsRetailAdapter:
     def __init__(
         self,
         *,
-        runner: AllowlistedCommandRunner | None = None,
+        runner: CommandRunner | None = None,
         workspace: Path,
         run_id: str | None = None,
         namespace: str | None = None,
@@ -283,6 +284,8 @@ class AwsRetailAdapter:
                 contaminated=self.contaminated,
                 changed_resources=tuple(self._changed),
                 diagnostics=tuple(self._diagnostics),
+                available_endpoints=frozenset(endpoint_names),
+                pods_ready=pods_ready,
             )
             self._last_state = state
             return state
@@ -351,8 +354,6 @@ class AwsRetailAdapter:
     def _baseline_checks(
         self, state: EnvironmentState, stable: int
     ) -> tuple[BaselineCheck, ...]:
-        required = set(AWS_RETAIL_ENVIRONMENT.required_workloads)
-        roles = {item.role for item in state.workloads}
         workloads_ready = bool(state.workloads) and all(
             item.ready_replicas >= item.desired_replicas
             and item.observed_generation == item.desired_generation
@@ -361,9 +362,14 @@ class AwsRetailAdapter:
         return (
             BaselineCheck("workloads_ready", workloads_ready, "kubernetes deployments"),
             BaselineCheck(
-                "required_endpoints", required <= roles, "kubernetes services"
+                "required_endpoints",
+                {"ui", "catalog", "carts", "orders", "checkout"}
+                <= state.available_endpoints,
+                "kubernetes endpoints",
             ),
-            BaselineCheck("pods_ready", state.healthy, "kubernetes pod conditions"),
+            BaselineCheck(
+                "pods_ready", state.pods_ready is True, "kubernetes pod conditions"
+            ),
             BaselineCheck(
                 "stable_readiness", stable >= 2, "two consecutive observations"
             ),
@@ -535,8 +541,18 @@ class AwsRetailAdapter:
     async def deploy_version(
         self, deployment: DeploymentSpecification
     ) -> DeploymentEvent:
-        if not deployment.image_digest:
-            raise ValueError("deployment image digest is required")
+        if (
+            not deployment.image_digest
+            or not re.fullmatch(r"sha256:[a-f0-9]{64}", deployment.image_digest)
+            or deployment.version.endswith(":latest")
+            or "@" in deployment.version
+        ):
+            raise ValueError(
+                "deployment requires an immutable tagged image and sha256 digest"
+            )
+        image = f"{deployment.version}@{deployment.image_digest}"
+        if not _IMAGE.fullmatch(image):
+            raise ValueError("image reference must be validated and immutable")
         state = await self.observe_state()
         target = next(
             (item for item in state.workloads if item.role == deployment.target.role),
@@ -544,13 +560,6 @@ class AwsRetailAdapter:
         )
         if target is None:
             raise ValueError("deployment target role was not observed")
-        image = deployment.version
-        if deployment.image_digest:
-            if not re.fullmatch(r"sha256:[a-f0-9]{64}", deployment.image_digest):
-                raise ValueError("image_digest must be an immutable sha256 digest")
-            image = f"{image}@{deployment.image_digest}"
-        if not _IMAGE.fullmatch(image) or ":latest" in image:
-            raise ValueError("image reference must be validated and immutable")
         if target.image:
             self._original_images.setdefault(target.name, target.image)
         try:

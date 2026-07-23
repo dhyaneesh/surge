@@ -11,7 +11,7 @@ obligations:
     tests: [test_namespace_is_dedicated_sanitized_and_validated]
   healthy_baseline:
     implementation: testbeds/adapters/online_boutique.py
-    tests: [test_baseline_requires_two_consecutive_healthy_observations]
+    tests: [test_baseline_requires_two_consecutive_healthy_observations, test_baseline_reports_missing_endpoints_without_hiding_ready_workloads]
   deterministic_reset:
     implementation: testbeds/adapters/online_boutique.py
     tests: [test_faults_are_targeted_and_reset_restores_state, test_apply_load_scales_pinned_upstream_generator_and_reset_restores_it]

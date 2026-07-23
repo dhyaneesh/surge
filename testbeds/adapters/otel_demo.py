@@ -35,6 +35,7 @@ from testbeds.models import (
 
 _TIMEOUT = timedelta(minutes=2)
 _RELEASE_NAME = "otel-demo"
+_IMAGE = re.compile(r"[a-z0-9][a-z0-9._/-]*:[A-Za-z0-9][A-Za-z0-9._-]*")
 _ISOLATED_HELM_VALUES = (
     "grafana.enabled=false",
     "jaeger.enabled=false",
@@ -138,7 +139,9 @@ class OpenTelemetryDemoAdapter:
             self._installed = True
             self._cleaned = False
             self._changed.append(
-                ChangedResource("Namespace", self.namespace, self.namespace, "installed")
+                ChangedResource(
+                    "Namespace", self.namespace, self.namespace, "installed"
+                )
             )
             return await self.observe_state()
         except Exception as error:
@@ -166,7 +169,13 @@ class OpenTelemetryDemoAdapter:
             return
         self._source.parent.mkdir(parents=True, exist_ok=True)
         await self._run(
-            ["git", "clone", "--no-checkout", self._release.repository, str(self._source)],
+            [
+                "git",
+                "clone",
+                "--no-checkout",
+                self._release.repository,
+                str(self._source),
+            ],
             timeout=timedelta(minutes=5),
         )
         await self._run(
@@ -178,7 +187,14 @@ class OpenTelemetryDemoAdapter:
     async def reset(self) -> None:
         try:
             await self._run(
-                ["kubectl", "scale", "deployment/load-generator", "--replicas=0", "-n", self.namespace],
+                [
+                    "kubectl",
+                    "scale",
+                    "deployment/load-generator",
+                    "--replicas=0",
+                    "-n",
+                    self.namespace,
+                ],
                 timeout=_TIMEOUT,
             )
             self._active_load = False
@@ -186,17 +202,37 @@ class OpenTelemetryDemoAdapter:
                 await self._set_fault(fault_type, active=False)
             for kind, name in tuple(self._created_resources):
                 await self._run(
-                    ["kubectl", "delete", kind, name, "-n", self.namespace, "--ignore-not-found=true"],
+                    [
+                        "kubectl",
+                        "delete",
+                        kind,
+                        name,
+                        "-n",
+                        self.namespace,
+                        "--ignore-not-found=true",
+                    ],
                     timeout=_TIMEOUT,
                 )
             self._created_resources.clear()
             await self._run(
                 [
-                    "helm", "upgrade", _RELEASE_NAME, OTEL_DEMO_ENVIRONMENT.chart,
-                    "--version", OTEL_DEMO_ENVIRONMENT.chart_version,
-                    "--namespace", self.namespace, "--reset-values",
-                    *(item for value in _ISOLATED_HELM_VALUES for item in ("--set", value)),
-                    "--wait", "--timeout", "15m",
+                    "helm",
+                    "upgrade",
+                    _RELEASE_NAME,
+                    OTEL_DEMO_ENVIRONMENT.chart,
+                    "--version",
+                    OTEL_DEMO_ENVIRONMENT.chart_version,
+                    "--namespace",
+                    self.namespace,
+                    "--reset-values",
+                    *(
+                        item
+                        for value in _ISOLATED_HELM_VALUES
+                        for item in ("--set", value)
+                    ),
+                    "--wait",
+                    "--timeout",
+                    "15m",
                 ],
                 timeout=timedelta(minutes=16),
             )
@@ -215,7 +251,14 @@ class OpenTelemetryDemoAdapter:
 
     async def _reinstall(self) -> None:
         await self._run(
-            ["helm", "uninstall", _RELEASE_NAME, "--namespace", self.namespace, "--ignore-not-found"],
+            [
+                "helm",
+                "uninstall",
+                _RELEASE_NAME,
+                "--namespace",
+                self.namespace,
+                "--ignore-not-found",
+            ],
             timeout=timedelta(minutes=5),
         )
         self._installed = False
@@ -231,7 +274,9 @@ class OpenTelemetryDemoAdapter:
             checks = self._baseline_checks(last_state)
             if all(check.passed for check in checks):
                 return BaselineState(True, checks=checks, environment=last_state)
-            await asyncio.sleep(min(2, max(0, deadline - asyncio.get_running_loop().time())))
+            await asyncio.sleep(
+                min(2, max(0, deadline - asyncio.get_running_loop().time()))
+            )
         error = TimeoutError("healthy baseline did not converge before timeout")
         await self._capture_diagnostics("baseline", error)
         raise error
@@ -248,10 +293,21 @@ class OpenTelemetryDemoAdapter:
         )
         return (
             BaselineCheck("workloads_ready", ready, "source-derived"),
-            BaselineCheck("required_endpoints", {"frontend", "load-generator"} <= roles, "source-derived"),
-            BaselineCheck("identity_and_version", identities, "implementation-inference"),
-            BaselineCheck("faults_clear", not self._active_faults, "implementation-inference"),
-            BaselineCheck("environment_clean", not self.contaminated, "implementation-inference"),
+            BaselineCheck(
+                "required_endpoints",
+                {"frontend", "load-generator"} <= roles
+                and any("frontend" in name for name in state.available_endpoints),
+                "kubernetes endpoints",
+            ),
+            BaselineCheck(
+                "identity_and_version", identities, "implementation-inference"
+            ),
+            BaselineCheck(
+                "faults_clear", not self._active_faults, "implementation-inference"
+            ),
+            BaselineCheck(
+                "environment_clean", not self.contaminated, "implementation-inference"
+            ),
         )
 
     def _healthy_baseline_for_test(self) -> BaselineState:
@@ -274,11 +330,21 @@ class OpenTelemetryDemoAdapter:
                 timeout=_TIMEOUT,
             )
             await self._run(
-                ["kubectl", "rollout", "status", "deployment/load-generator", "-n", self.namespace, "--timeout=2m"],
+                [
+                    "kubectl",
+                    "rollout",
+                    "status",
+                    "deployment/load-generator",
+                    "-n",
+                    self.namespace,
+                    "--timeout=2m",
+                ],
                 timeout=_TIMEOUT,
             )
             self._active_load = True
-            change = ChangedResource("ConfigMap", "load-control", self.namespace, "reconciled")
+            change = ChangedResource(
+                "ConfigMap", "load-control", self.namespace, "reconciled"
+            )
             self._changed.append(change)
             return LoadExecution(profile, True, (change,))
         except Exception as error:
@@ -290,7 +356,9 @@ class OpenTelemetryDemoAdapter:
             raise ValueError(f"unsupported fault: {fault.fault_type}")
         try:
             await self._set_fault(fault.fault_type, active=True)
-            change = ChangedResource("ConfigMap", "fault-control", self.namespace, "reconciled")
+            change = ChangedResource(
+                "ConfigMap", "fault-control", self.namespace, "reconciled"
+            )
             self._changed.append(change)
             return FaultExecution(fault, True, (change,))
         except Exception as error:
@@ -307,7 +375,16 @@ class OpenTelemetryDemoAdapter:
 
     async def _set_flag(self, flag: str, variant: str) -> None:
         current = await self._run(
-            ["kubectl", "get", "configmap", "flagd-config", "-n", self.namespace, "-o", "json"],
+            [
+                "kubectl",
+                "get",
+                "configmap",
+                "flagd-config",
+                "-n",
+                self.namespace,
+                "-o",
+                "json",
+            ],
             timeout=_TIMEOUT,
         )
         try:
@@ -317,12 +394,24 @@ class OpenTelemetryDemoAdapter:
             document = {
                 "$schema": "https://flagd.dev/schema/v0/flags.json",
                 "flags": {
-                    name: {"state": "ENABLED", "defaultVariant": disabled, "variants": {disabled: disabled, enabled: enabled}}
+                    name: {
+                        "state": "ENABLED",
+                        "defaultVariant": disabled,
+                        "variants": {disabled: disabled, enabled: enabled},
+                    }
                     for name, enabled, disabled in _FAULT_BINDINGS.values()
                 }
                 | {
-                    "loadGeneratorTraffic": {"state": "ENABLED", "defaultVariant": "on", "variants": {"off": 0, "on": 1}},
-                    "loadGeneratorVUs": {"state": "ENABLED", "defaultVariant": "5", "variants": {key: int(key) for key in ("5", "10", "25", "50")}},
+                    "loadGeneratorTraffic": {
+                        "state": "ENABLED",
+                        "defaultVariant": "on",
+                        "variants": {"off": 0, "on": 1},
+                    },
+                    "loadGeneratorVUs": {
+                        "state": "ENABLED",
+                        "defaultVariant": "5",
+                        "variants": {key: int(key) for key in ("5", "10", "25", "50")},
+                    },
                 },
             }
         if flag not in document.get("flags", {}):
@@ -335,7 +424,18 @@ class OpenTelemetryDemoAdapter:
             separators=(",", ":"),
         )
         await self._run(
-            ["kubectl", "patch", "configmap", "flagd-config", "-n", self.namespace, "--type", "merge", "-p", patch],
+            [
+                "kubectl",
+                "patch",
+                "configmap",
+                "flagd-config",
+                "-n",
+                self.namespace,
+                "--type",
+                "merge",
+                "-p",
+                patch,
+            ],
             timeout=_TIMEOUT,
         )
         # The chart copies this ConfigMap into flagd's writable volume at pod
@@ -345,32 +445,94 @@ class OpenTelemetryDemoAdapter:
             timeout=_TIMEOUT,
         )
         await self._run(
-            ["kubectl", "rollout", "status", "deployment/flagd", "-n", self.namespace, "--timeout=2m"],
+            [
+                "kubectl",
+                "rollout",
+                "status",
+                "deployment/flagd",
+                "-n",
+                self.namespace,
+                "--timeout=2m",
+            ],
             timeout=_TIMEOUT,
         )
 
-    async def deploy_version(self, deployment: DeploymentSpecification) -> DeploymentEvent:
+    async def deploy_version(
+        self, deployment: DeploymentSpecification
+    ) -> DeploymentEvent:
+        if (
+            not deployment.image_digest
+            or not re.fullmatch(r"sha256:[a-f0-9]{64}", deployment.image_digest)
+            or not _IMAGE.fullmatch(deployment.version)
+            or deployment.version.endswith(":latest")
+            or "@" in deployment.version
+        ):
+            raise ValueError(
+                "deployment requires an immutable tagged image and sha256 digest"
+            )
         state = await self.observe_state()
-        target = next((item for item in state.workloads if item.role == deployment.target.role), None)
+        target = next(
+            (item for item in state.workloads if item.role == deployment.target.role),
+            None,
+        )
         if target is None:
             raise ValueError("deployment target role was not observed")
-        image = deployment.version
-        if deployment.image_digest:
-            image = f"{image}@{deployment.image_digest}"
+        image = f"{deployment.version}@{deployment.image_digest}"
         await self._run(
-            ["kubectl", "set", "image", f"deployment/{target.name}", f"*={image}", "-n", self.namespace],
+            [
+                "kubectl",
+                "set",
+                "image",
+                f"deployment/{target.name}",
+                f"*={image}",
+                "-n",
+                self.namespace,
+            ],
             timeout=_TIMEOUT,
         )
         change = ChangedResource("Deployment", target.name, self.namespace, "updated")
-        return DeploymentEvent(deployment.target, self._image_version(target.image), deployment.version, changed_resources=(change,))
+        return DeploymentEvent(
+            deployment.target,
+            self._image_version(target.image),
+            deployment.version,
+            changed_resources=(change,),
+        )
 
     async def observe_state(self) -> EnvironmentState:
         try:
-            response = await self._run(
-                ["kubectl", "get", "deployments", "-n", self.namespace, "-o", "json"],
-                timeout=_TIMEOUT,
+            response, endpoint_response = await asyncio.gather(
+                self._run(
+                    [
+                        "kubectl",
+                        "get",
+                        "deployments",
+                        "-n",
+                        self.namespace,
+                        "-o",
+                        "json",
+                    ],
+                    timeout=_TIMEOUT,
+                ),
+                self._run(
+                    [
+                        "kubectl",
+                        "get",
+                        "endpoints",
+                        "-n",
+                        self.namespace,
+                        "-o",
+                        "json",
+                    ],
+                    timeout=_TIMEOUT,
+                ),
             )
             payload = json.loads(response.stdout or '{"items": []}')
+            endpoint_payload = json.loads(endpoint_response.stdout or '{"items": []}')
+            endpoint_names = frozenset(
+                item.get("metadata", {}).get("name", "")
+                for item in endpoint_payload.get("items", [])
+                if any(subset.get("addresses") for subset in item.get("subsets", []))
+            )
             workloads = tuple(self._workload(item) for item in payload.get("items", []))
             services = tuple(
                 ObservedServiceIdentity(
@@ -381,12 +543,25 @@ class OpenTelemetryDemoAdapter:
                 )
                 for item in workloads
             )
-            healthy = bool(workloads) and all(
-                item.ready_replicas >= item.desired_replicas for item in workloads
+            healthy = (
+                bool(workloads)
+                and all(
+                    item.ready_replicas >= item.desired_replicas for item in workloads
+                )
+                and any("frontend" in name for name in endpoint_names)
+                and not self._active_faults
             )
             return EnvironmentState(
-                "otel-demo", self.namespace, self._release, workloads, services,
-                healthy, self.contaminated, tuple(self._changed), tuple(self._diagnostics)
+                environment="otel-demo",
+                namespace=self.namespace,
+                release=self._release,
+                workloads=workloads,
+                services=services,
+                healthy=healthy,
+                contaminated=self.contaminated,
+                changed_resources=tuple(self._changed),
+                diagnostics=tuple(self._diagnostics),
+                available_endpoints=endpoint_names,
             )
         except Exception as error:
             await self._capture_diagnostics("observe", error)
@@ -398,8 +573,17 @@ class OpenTelemetryDemoAdapter:
         status = raw.get("status", {})
         template = spec.get("template", {})
         labels = template.get("metadata", {}).get("labels", {})
-        component = labels.get("app.kubernetes.io/component") or metadata.get("name", "")
-        image = next((item.get("image") for item in template.get("spec", {}).get("containers", []) if item.get("image")), None)
+        component = labels.get("app.kubernetes.io/component") or metadata.get(
+            "name", ""
+        )
+        image = next(
+            (
+                item.get("image")
+                for item in template.get("spec", {}).get("containers", [])
+                if item.get("image")
+            ),
+            None,
+        )
         return WorkloadState(
             _ROLE_BY_COMPONENT.get(component, "application-service"),
             metadata.get("name", ""),
@@ -426,11 +610,29 @@ class OpenTelemetryDemoAdapter:
             return
         try:
             await self._run(
-                ["helm", "uninstall", _RELEASE_NAME, "--namespace", self.namespace, "--ignore-not-found", "--wait", "--timeout", "10m"],
+                [
+                    "helm",
+                    "uninstall",
+                    _RELEASE_NAME,
+                    "--namespace",
+                    self.namespace,
+                    "--ignore-not-found",
+                    "--wait",
+                    "--timeout",
+                    "10m",
+                ],
                 timeout=timedelta(minutes=11),
             )
             await self._run(
-                ["kubectl", "delete", "namespace", self.namespace, "--ignore-not-found=true", "--wait=true", "--timeout=10m"],
+                [
+                    "kubectl",
+                    "delete",
+                    "namespace",
+                    self.namespace,
+                    "--ignore-not-found=true",
+                    "--wait=true",
+                    "--timeout=10m",
+                ],
                 timeout=timedelta(minutes=11),
             )
             self._cleaned = True
@@ -449,7 +651,11 @@ class OpenTelemetryDemoAdapter:
             result = await self._runner.run(argv, timeout=timeout, cwd=cwd)
         except Exception:
             self._command_history.append(
-                {"argv": safe_argv, "timeout_seconds": timeout.total_seconds(), "outcome": "failed"}
+                {
+                    "argv": safe_argv,
+                    "timeout_seconds": timeout.total_seconds(),
+                    "outcome": "failed",
+                }
             )
             raise
         self._command_history.append(
@@ -464,42 +670,104 @@ class OpenTelemetryDemoAdapter:
         return result
 
     async def _capture_diagnostics(self, operation: str, error: Exception) -> None:
-        directory = self._workspace / "diagnostics" / f"{operation}-{len(self._diagnostics) + 1}"
+        directory = (
+            self._workspace
+            / "diagnostics"
+            / f"{operation}-{len(self._diagnostics) + 1}"
+        )
         directory.mkdir(parents=True, exist_ok=True)
         commands = (
-            ("resources", ["kubectl", "get", "all,configmaps", "-n", self.namespace, "-o", "yaml"]),
-            ("workloads-pods", ["kubectl", "get", "deployments,pods", "-n", self.namespace, "-o", "wide"]),
+            (
+                "resources",
+                [
+                    "kubectl",
+                    "get",
+                    "all,configmaps",
+                    "-n",
+                    self.namespace,
+                    "-o",
+                    "yaml",
+                ],
+            ),
+            (
+                "workloads-pods",
+                [
+                    "kubectl",
+                    "get",
+                    "deployments,pods",
+                    "-n",
+                    self.namespace,
+                    "-o",
+                    "wide",
+                ],
+            ),
             ("pod-descriptions", ["kubectl", "describe", "pods", "-n", self.namespace]),
-            ("events", ["kubectl", "get", "events", "-n", self.namespace, "-o", "yaml"]),
-            ("logs", ["kubectl", "logs", "-n", self.namespace, "-l", "app.kubernetes.io/part-of=opentelemetry-demo", "--all-containers=true", "--tail=200"]),
-            ("helm-values", ["helm", "get", "values", _RELEASE_NAME, "-n", self.namespace, "--all"]),
-            ("helm-manifest", ["helm", "get", "manifest", _RELEASE_NAME, "-n", self.namespace]),
+            (
+                "events",
+                ["kubectl", "get", "events", "-n", self.namespace, "-o", "yaml"],
+            ),
+            (
+                "logs",
+                [
+                    "kubectl",
+                    "logs",
+                    "-n",
+                    self.namespace,
+                    "-l",
+                    "app.kubernetes.io/part-of=opentelemetry-demo",
+                    "--all-containers=true",
+                    "--tail=200",
+                ],
+            ),
+            (
+                "helm-values",
+                ["helm", "get", "values", _RELEASE_NAME, "-n", self.namespace, "--all"],
+            ),
+            (
+                "helm-manifest",
+                ["helm", "get", "manifest", _RELEASE_NAME, "-n", self.namespace],
+            ),
         )
         command_metadata = []
         for category, argv in commands:
             try:
                 result = await self._runner.run(argv, timeout=_TIMEOUT)
-                content = result.stdout + ("\nSTDERR:\n" + result.stderr if result.stderr else "")
-                command_metadata.append({"argv": list(result.argv), "returncode": result.returncode, "duration_seconds": result.duration_seconds})
+                content = result.stdout + (
+                    "\nSTDERR:\n" + result.stderr if result.stderr else ""
+                )
+                command_metadata.append(
+                    {
+                        "argv": list(result.argv),
+                        "returncode": result.returncode,
+                        "duration_seconds": result.duration_seconds,
+                    }
+                )
             except Exception as diagnostic_error:
                 content = f"diagnostic collection failed: {diagnostic_error}"
-                command_metadata.append({"argv": list(argv), "error": str(diagnostic_error)})
+                command_metadata.append(
+                    {"argv": list(argv), "error": str(diagnostic_error)}
+                )
             path = directory / f"{category}.txt"
             path.write_text(redact(content), encoding="utf-8")
             self._diagnostics.append(DiagnosticArtifactReference(category, str(path)))
         state_path = directory / "adapter-state.json"
         state_path.write_text(
-            json.dumps({
-                "operation": operation,
-                "error": redact(str(error)),
-                "namespace": self.namespace,
-                "release": self._release.commit_sha,
-                "active_load": self._active_load,
-                "active_faults": sorted(item.value for item in self._active_faults),
-                "contaminated": self.contaminated,
-                "executed_commands": self._command_history,
-                "commands": command_metadata,
-            }, indent=2),
+            json.dumps(
+                {
+                    "operation": operation,
+                    "error": redact(str(error)),
+                    "namespace": self.namespace,
+                    "release": self._release.commit_sha,
+                    "active_load": self._active_load,
+                    "active_faults": sorted(item.value for item in self._active_faults),
+                    "contaminated": self.contaminated,
+                    "executed_commands": self._command_history,
+                    "commands": command_metadata,
+                },
+                indent=2,
+            ),
             encoding="utf-8",
         )
-        self._diagnostics.append(DiagnosticArtifactReference("adapter-state", str(state_path)))
+        self._diagnostics.append(
+            DiagnosticArtifactReference("adapter-state", str(state_path))
+        )

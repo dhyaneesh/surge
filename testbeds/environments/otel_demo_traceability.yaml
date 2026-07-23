@@ -1,0 +1,17 @@
+environment: otel-demo
+source_sections:
+  - 20.1 OpenTelemetry Demo
+  - 21 Test environment adapter contract
+obligations:
+  immutable_release:
+    implementation: testbeds/adapters/otel_demo.py
+    tests: [test_environment_pin_is_full_sha_and_documents_baseline_provenance, test_deploy_version_rejects_mutable_or_invalid_images_without_cluster_write]
+  healthy_baseline:
+    implementation: testbeds/adapters/otel_demo.py
+    tests: [test_baseline_requires_real_frontend_endpoint, test_observe_state_is_unhealthy_while_fault_is_active]
+  normalized_observation:
+    implementation: testbeds/adapters/otel_demo.py
+    tests: [test_observe_state_returns_normalized_workloads_and_versions, test_observe_state_is_unhealthy_while_fault_is_active]
+  deterministic_reset:
+    implementation: testbeds/adapters/otel_demo.py
+    tests: [test_reset_reconciles_after_partial_failure_and_reinstalls_when_contaminated]

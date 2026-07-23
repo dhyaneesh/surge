@@ -160,7 +160,9 @@ def test_install_creates_the_dedicated_namespace_before_applying_the_pinned_fixt
             result(),
             result(stdout=ARGO_ROLLOUTS_ENVIRONMENT.commit_sha + "\n"),
             result(),
-            result(stdout="kind: Rollout\n"),
+            result(
+                stdout="kind: Rollout\nspec:\n  template:\n    spec:\n      containers:\n      - name: canary-demo\n        image: argoproj/rollouts-demo:blue\n"
+            ),
             *[result(stdout=value) for value in cluster_payload()],
         ]
     )
@@ -180,6 +182,24 @@ def test_install_creates_the_dedicated_namespace_before_applying_the_pinned_fixt
     )
     assert adapter.namespace in namespace_call[3]
     assert adapter.namespace in fixture_call[0]
+
+
+def test_pin_images_rejects_unexpected_mutable_fixture_image():
+    manifest = """
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+spec:
+  template:
+    spec:
+      containers:
+      - name: canary-demo
+        image: argoproj/rollouts-demo:blue
+      - name: helper
+        image: busybox:latest
+"""
+
+    with pytest.raises(RuntimeError, match="unpinned image"):
+        ArgoRolloutsDemoAdapter._pin_images(manifest)
 
 
 def test_observe_state_normalizes_rollout_replica_set_pod_service_versions_and_health(

@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import Sequence
+from typing import Protocol, Sequence
 
 
 class CommandRejected(ValueError):
@@ -23,6 +23,17 @@ class CommandResult:
     stdout: str
     stderr: str
     duration_seconds: float
+
+
+class CommandRunner(Protocol):
+    async def run(
+        self,
+        argv: Sequence[str],
+        *,
+        timeout: timedelta,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+    ) -> CommandResult: ...
 
 
 _SECRET_PATTERNS = (
@@ -93,9 +104,7 @@ class AllowlistedCommandRunner:
         source = dict(os.environ if base_environment is None else base_environment)
         path = source.get("PATH", "/usr/local/bin:/usr/bin:/bin")
         self._environment = {
-            key: source[key]
-            for key in self._ENVIRONMENT_ALLOWLIST
-            if source.get(key)
+            key: source[key] for key in self._ENVIRONMENT_ALLOWLIST if source.get(key)
         }
         self._environment["PATH"] = path
         self._environment.update({"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"})
@@ -130,15 +139,15 @@ class AllowlistedCommandRunner:
         home = source.get("HOME")
         configured = source.get("KUBECONFIG")
         if configured:
-            paths = [Path(item).expanduser() for item in configured.split(os.pathsep) if item]
+            paths = [
+                Path(item).expanduser() for item in configured.split(os.pathsep) if item
+            ]
         elif home:
             paths = [Path(home) / ".kube" / "config"]
         else:
             paths = []
         hostnames: list[str] = []
-        server_pattern = re.compile(
-            r'^\s*server\s*:\s*["\']?([^\s"\']+)', re.MULTILINE
-        )
+        server_pattern = re.compile(r'^\s*server\s*:\s*["\']?([^\s"\']+)', re.MULTILINE)
         for path in paths:
             try:
                 content = path.read_text(encoding="utf-8")

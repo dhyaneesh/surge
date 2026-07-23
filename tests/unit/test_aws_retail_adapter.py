@@ -7,8 +7,13 @@ import pytest
 from testbeds.adapters.aws_retail import AwsRetailAdapter
 from testbeds.adapters.command_runner import CommandResult
 from testbeds.environments.aws_retail import AWS_RETAIL_ENVIRONMENT
-from testbeds.models import FaultSpecification, FaultType, WorkloadSelector
-from testbeds.models import LoadProfile
+from testbeds.models import (
+    DeploymentSpecification,
+    FaultSpecification,
+    FaultType,
+    LoadProfile,
+    WorkloadSelector,
+)
 
 
 class FakeRunner:
@@ -223,6 +228,29 @@ def test_observe_state_is_unhealthy_when_required_endpoints_have_no_addresses(
     assert not state.healthy
 
 
+def test_baseline_check_reports_missing_endpoints_separately_from_ready_workloads(
+    tmp_path,
+):
+    deployments, services, pods, _ = cluster_payload()
+    adapter = AwsRetailAdapter(
+        runner=FakeRunner(
+            [
+                result(stdout=deployments),
+                result(stdout=services),
+                result(stdout=pods),
+                result(stdout=json.dumps({"items": []})),
+            ]
+        ),
+        workspace=tmp_path,
+    )
+    state = asyncio.run(adapter.observe_state())
+
+    checks = {check.name: check for check in adapter._baseline_checks(state, stable=0)}
+
+    assert checks["workloads_ready"].passed
+    assert not checks["required_endpoints"].passed
+
+
 @pytest.mark.parametrize(
     ("fault_type", "role"),
     [
@@ -260,6 +288,29 @@ def test_deploy_version_requires_digest(tmp_path):
     )
     with pytest.raises(ValueError, match="digest"):
         asyncio.run(adapter.deploy_version(deployment_spec))
+
+
+@pytest.mark.parametrize(
+    ("version", "digest"),
+    [
+        ("registry.example/checkout:latest", "sha256:" + "a" * 64),
+        ("registry.example/checkout:v2", "invalid"),
+    ],
+)
+def test_deploy_version_validates_immutable_image_before_cluster_reads(
+    tmp_path, version, digest
+):
+    runner = FakeRunner()
+    adapter = AwsRetailAdapter(runner=runner, workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="immutable"):
+        asyncio.run(
+            adapter.deploy_version(
+                DeploymentSpecification(WorkloadSelector("checkout"), version, digest)
+            )
+        )
+
+    assert runner.calls == []
 
 
 def test_reset_restores_original_deployment_image(tmp_path):

@@ -1,9 +1,7 @@
 import asyncio
 import json
-import os
 import subprocess
 from datetime import timedelta
-from pathlib import Path
 
 import pytest
 
@@ -16,10 +14,13 @@ from testbeds.adapters.command_runner import (
 from testbeds.adapters.otel_demo import OpenTelemetryDemoAdapter
 from testbeds.environments.otel_demo import OTEL_DEMO_ENVIRONMENT
 from testbeds.models import (
+    DeploymentSpecification,
     FaultSpecification,
     FaultType,
+    EnvironmentState,
     LoadProfile,
     WorkloadSelector,
+    WorkloadState,
 )
 
 
@@ -101,7 +102,7 @@ def test_runner_sanitizes_environment_captures_output_and_forbids_shell(monkeypa
 
 def test_redaction_removes_common_secret_forms():
     dirty = (
-        'Authorization: Bearer abc.def\npassword: hunter2\n'
+        "Authorization: Bearer abc.def\npassword: hunter2\n"
         'client_secret="value"\nTOKEN=something'
     )
     clean = redact(dirty)
@@ -140,15 +141,24 @@ def test_runner_preserves_only_safe_connectivity_variables(monkeypatch, tmp_path
     asyncio.run(runner.run(["helm", "version"], timeout=timedelta(seconds=1)))
     assert captured[0] == captured[1]
     for key in (
-        "PATH", "HOME", "KUBECONFIG", "HTTP_PROXY", "https_proxy",
-        "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+        "PATH",
+        "HOME",
+        "KUBECONFIG",
+        "HTTP_PROXY",
+        "https_proxy",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
     ):
         assert captured[0][key] == source[key]
     assert "AWS_SECRET_ACCESS_KEY" not in captured[0]
     assert "RANDOM_SETTING" not in captured[0]
 
 
-def test_runner_adds_api_hostname_from_kubeconfig_without_kubectl(monkeypatch, tmp_path):
+def test_runner_adds_api_hostname_from_kubeconfig_without_kubectl(
+    monkeypatch, tmp_path
+):
     kubeconfig = tmp_path / "kubeconfig"
     kubeconfig.write_text(
         "apiVersion: v1\nclusters:\n- cluster:\n"
@@ -163,12 +173,19 @@ def test_runner_adds_api_hostname_from_kubeconfig_without_kubectl(monkeypatch, t
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     runner = AllowlistedCommandRunner(
-        base_environment={"PATH": "/bin", "HOME": str(tmp_path), "KUBECONFIG": str(kubeconfig)}
+        base_environment={
+            "PATH": "/bin",
+            "HOME": str(tmp_path),
+            "KUBECONFIG": str(kubeconfig),
+        }
     )
     asyncio.run(runner.run(["kubectl", "get", "nodes"], timeout=timedelta(seconds=1)))
     assert captured["NO_PROXY"] == captured["no_proxy"]
     assert captured["NO_PROXY"].split(",") == [
-        "127.0.0.1", "localhost", "::1", "active-api.example.internal"
+        "127.0.0.1",
+        "localhost",
+        "::1",
+        "active-api.example.internal",
     ]
 
 
@@ -191,7 +208,12 @@ def test_runner_merges_upper_and_lower_no_proxy_consistently(monkeypatch):
     asyncio.run(runner.run(["helm", "version"], timeout=timedelta(seconds=1)))
     assert captured["NO_PROXY"] == captured["no_proxy"]
     assert captured["NO_PROXY"].split(",") == [
-        "upper.example", "localhost", "lower.example", "127.0.0.1", "::1", "10.0.0.1"
+        "upper.example",
+        "localhost",
+        "lower.example",
+        "127.0.0.1",
+        "::1",
+        "10.0.0.1",
     ]
     assert "KUBERNETES_SERVICE_HOST" not in captured
 
@@ -313,7 +335,9 @@ def test_observe_state_returns_normalized_workloads_and_versions(tmp_path):
                 "spec": {
                     "replicas": 1,
                     "template": {
-                        "metadata": {"labels": {"app.kubernetes.io/component": "checkout"}},
+                        "metadata": {
+                            "labels": {"app.kubernetes.io/component": "checkout"}
+                        },
                         "spec": {"containers": [{"image": "otel/demo:v2@sha256:abc"}]},
                     },
                 },
@@ -328,6 +352,97 @@ def test_observe_state_returns_normalized_workloads_and_versions(tmp_path):
     assert state.workloads[0].ready_replicas == 1
     assert state.services[0].version == "v2"
     assert state.services[0].image_digest == "sha256:abc"
+
+
+def test_observe_state_is_unhealthy_while_fault_is_active(tmp_path):
+    payload = {
+        "items": [
+            {
+                "metadata": {"name": "demo-checkout", "generation": 1},
+                "spec": {
+                    "replicas": 1,
+                    "template": {
+                        "metadata": {
+                            "labels": {"app.kubernetes.io/component": "checkout"}
+                        },
+                        "spec": {
+                            "containers": [{"image": "otel/demo:v2@sha256:" + "a" * 64}]
+                        },
+                    },
+                },
+                "status": {"availableReplicas": 1, "observedGeneration": 1},
+            }
+        ]
+    }
+    endpoints = json.dumps(
+        {
+            "items": [
+                {
+                    "metadata": {"name": "frontendproxy"},
+                    "subsets": [{"addresses": [{"ip": "10.0.0.1"}]}],
+                }
+            ]
+        }
+    )
+    adapter = OpenTelemetryDemoAdapter(
+        runner=FakeRunner(
+            [
+                result(["kubectl"], json.dumps(payload)),
+                result(["kubectl"], endpoints),
+                result(["kubectl"], json.dumps(payload)),
+                result(["kubectl"], endpoints),
+            ]
+        ),
+        workspace=tmp_path,
+    )
+
+    assert asyncio.run(adapter.observe_state()).healthy
+    adapter._active_faults.add(FaultType.SERVICE_FAILURE)
+
+    state = asyncio.run(adapter.observe_state())
+
+    assert not state.healthy
+
+
+def test_baseline_requires_real_frontend_endpoint(tmp_path):
+    adapter = OpenTelemetryDemoAdapter(runner=FakeRunner(), workspace=tmp_path)
+    state = EnvironmentState(
+        workloads=(
+            WorkloadState("frontend", "frontendproxy", 1, 1, 1, 1),
+            WorkloadState("load-generator", "load-generator", 1, 1, 1, 1),
+        ),
+        available_endpoints=frozenset(),
+    )
+
+    checks = {check.name: check for check in adapter._baseline_checks(state)}
+
+    assert not checks["required_endpoints"].passed
+
+
+@pytest.mark.parametrize(
+    ("version", "digest"),
+    [
+        ("otel/demo:latest", "sha256:" + "a" * 64),
+        ("otel/demo:v2", None),
+        ("otel/demo:v2", "not-a-digest"),
+    ],
+)
+def test_deploy_version_rejects_mutable_or_invalid_images_without_cluster_write(
+    tmp_path, version, digest
+):
+    runner = FakeRunner()
+    adapter = OpenTelemetryDemoAdapter(runner=runner, workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="immutable"):
+        asyncio.run(
+            adapter.deploy_version(
+                DeploymentSpecification(
+                    WorkloadSelector("transaction-processor"), version, digest
+                )
+            )
+        )
+
+    assert runner.calls == []
 
 
 def test_reset_reconciles_after_partial_failure_and_reinstalls_when_contaminated(

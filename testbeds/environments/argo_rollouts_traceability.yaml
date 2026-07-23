@@ -5,7 +5,7 @@ source_sections:
 obligations:
   immutable_release:
     implementation: testbeds/environments/argo_rollouts.py
-    tests: [test_pinned_release_and_supported_fixture_capabilities_are_explicit]
+    tests: [test_pinned_release_and_supported_fixture_capabilities_are_explicit, test_pin_images_rejects_unexpected_mutable_fixture_image]
   namespace_isolation:
     implementation: testbeds/adapters/argo_rollouts.py
     tests: [test_namespace_is_dedicated_sanitized_and_validated]

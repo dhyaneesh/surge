@@ -109,6 +109,8 @@ class EnvironmentState:
     changed_resources: tuple[ChangedResource, ...] = ()
     diagnostics: tuple[DiagnosticArtifactReference, ...] = ()
     scaling: ScalingState | None = None
+    available_endpoints: frozenset[str] = frozenset()
+    pods_ready: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -5,13 +5,13 @@ source_sections:
 obligations:
   immutable_release:
     implementation: testbeds/environments/aws_retail.py
-    tests: [test_environment_pin_is_real_full_sha_and_immutable_package_digest, test_install_verifies_head_before_first_kubernetes_mutation]
+    tests: [test_environment_pin_is_real_full_sha_and_immutable_package_digest, test_install_verifies_head_before_first_kubernetes_mutation, test_deploy_version_validates_immutable_image_before_cluster_reads]
   namespace_isolation:
     implementation: testbeds/adapters/aws_retail.py
     tests: [test_namespace_is_sanitized_and_invalid_override_is_rejected]
   healthy_baseline:
     implementation: testbeds/adapters/aws_retail.py
-    tests: [test_baseline_requires_two_stable_ready_observations, test_baseline_timeout_collects_bounded_diagnostics]
+    tests: [test_baseline_requires_two_stable_ready_observations, test_baseline_check_reports_missing_endpoints_separately_from_ready_workloads, test_baseline_timeout_collects_bounded_diagnostics]
   deterministic_reset:
     implementation: testbeds/adapters/aws_retail.py
     tests: [test_supported_fault_apply_and_reset_restores_original_state, test_reset_restores_original_deployment_image]
