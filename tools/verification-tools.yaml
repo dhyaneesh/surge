@@ -66,8 +66,8 @@ capabilities:
   test:testbeds-unit: {availability: active}
   test:testbeds-contract: {availability: active}
   test:policy: {availability: baseline, reason: no tests are configured}
-  test:replay: {availability: baseline, reason: no tests are configured}
-  test:replay-deterministic: {availability: baseline, reason: no tests are configured}
+  test:replay: {availability: active}
+  test:replay-deterministic: {availability: active}
   test:security: {availability: active}
   test:reasoner: {availability: baseline, reason: no tests are configured}
   test:keda-scaler: {availability: baseline, reason: no tests are configured}
@@ -110,8 +110,8 @@ targets:
   test:testbeds-unit: {dependencies: [task, uv, pytest], capabilities: [test:testbeds-unit]}
   test:testbeds-contract: {dependencies: [task, uv, pytest], capabilities: [test:testbeds-contract]}
   test:policy: {dependencies: [], capabilities: [test:policy]}
-  test:replay: {dependencies: [], capabilities: [test:replay]}
-  test:replay-deterministic: {dependencies: [], capabilities: [test:replay-deterministic]}
+  test:replay: {dependencies: [task, uv, pytest], capabilities: [test:replay]}
+  test:replay-deterministic: {dependencies: [task, uv, pytest], capabilities: [test:replay-deterministic]}
   test:security: {dependencies: [task, uv, pytest], capabilities: [test:security]}
   test:reasoner: {dependencies: [], capabilities: [test:reasoner]}
   test:keda-scaler: {dependencies: [], capabilities: [test:keda-scaler]}

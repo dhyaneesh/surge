@@ -168,8 +168,6 @@ def test_manifest_targets_declare_dependencies_and_capabilities() -> None:
         "test:keda-scaler",
         "test:policy",
         "test:reasoner",
-        "test:replay",
-        "test:replay-deterministic",
         "mcp:signoz:smoke",
         "diagnostics:signoz",
     }
@@ -186,6 +184,9 @@ def test_manifest_targets_declare_dependencies_and_capabilities() -> None:
 
     for name in MANDATORY_TARGETS - baseline_targets:
         assert capabilities[name] == {"availability": "active"}
+
+    for name in ("test:replay", "test:replay-deterministic"):
+        assert targets[name]["dependencies"] == ["task", "uv", "pytest"]
 
 
 def test_tools_directory_is_ignored() -> None:

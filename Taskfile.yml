@@ -123,10 +123,14 @@ tasks:
   test:replay:
     cmds:
       - "{{.PREFLIGHT}} test:replay"
+      - "{{.UV}} run --locked --no-sync python -m tools.verification_harness suite test:replay tests/replay"
+      - "{{.UV}} run --locked pytest tests/replay"
 
   test:replay-deterministic:
     cmds:
       - "{{.PREFLIGHT}} test:replay-deterministic"
+      - "{{.UV}} run --locked --no-sync python -m tools.verification_harness suite test:replay-deterministic tests/replay"
+      - "{{.UV}} run --locked pytest tests/replay"
 
   test:security:
     cmds:
