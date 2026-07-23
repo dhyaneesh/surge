@@ -108,12 +108,16 @@ def document() -> dict:
 def test_complete_v1alpha2_is_frozen_and_serializes_with_aliases() -> None:
     scenario = GuardianScenarioV1Alpha2.model_validate(document())
     proposed = scenario.spec.expected.actions.proposed
+    allowed_mutations = scenario.spec.expected.mutations.allowed_actions
     assert proposed is not None
     assert proposed.scale_direction is not None
     assert proposed.scale_direction.value == "up"
-    assert scenario.model_dump(mode="json", by_alias=True)["apiVersion"].endswith(
-        "v1alpha2"
-    )
+    assert allowed_mutations == (proposed,)
+    rendered = scenario.model_dump(mode="json", by_alias=True)
+    assert rendered["apiVersion"].endswith("v1alpha2")
+    assert rendered["spec"]["expected"]["mutations"]["actions"] == [
+        {"actionType": "scale", "scaleDirection": "up"}
+    ]
     with pytest.raises(ValidationError):
         scenario.spec.description = "changed"
 
@@ -151,4 +155,14 @@ def test_unknown_with_unhealthy_telemetry_is_rejected() -> None:
     expected["mutations"] = {"count": {"exact": 0}, "actions": []}
     expected.pop("recovery")
     with pytest.raises(ValidationError):
+        GuardianScenarioV1Alpha2.model_validate(value)
+
+
+def test_positive_mutation_lower_bound_requires_an_allowed_action() -> None:
+    value = document()
+    mutations = value["spec"]["expected"]["mutations"]
+    mutations["count"] = {"exact": 1}
+    mutations["actions"] = []
+
+    with pytest.raises(ValidationError, match="positive mutation cardinality"):
         GuardianScenarioV1Alpha2.model_validate(value)

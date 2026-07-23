@@ -69,6 +69,7 @@ multi-tenant-fixture          workflow-observation
 approval-control              recovery-observation
 mutation-observation          scaler-observation
 incident-ingress-control      ambiguous-symptom
+action-controller-execution
 ```
 
 These are environment capabilities, not service-selector capabilities and not
@@ -78,6 +79,11 @@ five demo environment declarations must state only capabilities supported by
 their fixture responsibilities and implemented adapters; desired future support
 is represented as a blocking reason in derived compatibility input, not as a
 declared capability.
+
+`action-controller-execution` is a preflight-only runtime capability. It means
+that a real action controller can execute and report a mutation; mutation
+observation alone does not imply execution. The minimal Guardian runtime does
+not declare this capability.
 
 ## Decision
 
@@ -150,7 +156,7 @@ GuardianScenarioV1Alpha2
         │   └── approval_count: CardinalityExpectation
         ├── mutations: MutationExpectation
         │   ├── count: CardinalityExpectation
-        │   ├── actions: tuple[ActionAssertion, ...]
+        │   ├── allowed_actions: tuple[ActionAssertion, ...] # YAML: actions
         │   └── target: ScenarioTarget | None
         ├── audit: AuditExpectation
         │   └── events: tuple[AuditEventExpectation, ...]
@@ -304,9 +310,13 @@ compatibility. It contains no independently authored semantic values.
 8. Any eligible or proposed mutating action requires a Recovery Contract
    reference, fresh recovery evidence, `recovery-observation`, and mutation
    observation.
-9. Mutation action assertions are a subset of eligible actions with exact
-   direction agreement. A proposed scale-up cannot be satisfied by an observed
-   scale-down. Zero mutations may not declare mutation actions or a target.
+9. Mutation allowed-action assertions are a subset of eligible actions with
+   exact direction agreement. They constrain executed mutations; they do not
+   require execution when the cardinality lower bound is zero. Every executed
+   mutation must be in the allowed set. When the lower bound is positive, at
+   least one allowed action must occur; alternative allowed actions need not all
+   execute. A proposed scale-up cannot be satisfied by an executed scale-down.
+   Zero mutations may not declare a target.
 10. Non-actionable incidents require zero mutations and no proposed mutating
     action.
 11. `telemetry_failure` forbids scale and rollback, requires unusable telemetry
@@ -428,6 +438,29 @@ Given a v1alpha2 scenario and an environment declaration:
 Environment declarations are the source of compatibility facts. Adapter
 protocol conformance tests verify declarations against implementations; an
 adapter class is not introspected during pure derivation.
+
+A positive mutation cardinality lower bound implicitly requires
+`action-controller-execution` during preflight. A runtime that does not declare
+that capability is unsupported for the scenario even when it can observe
+mutations. This derived requirement is a test-harness compatibility fact; it
+does not mark any normative action-controller requirement implemented.
+
+## Recommendation-only execution semantics
+
+`actions.eligible` and `actions.proposed` remain deterministic Guardian
+recommendations. `mutations.actions` is retained on the YAML wire contract for
+compatibility, but maps internally to `allowed_actions`: the set of mutations
+that may have executed. A Guardian observation retains the `mutations` wire key
+and maps it internally to `executed_mutations`.
+
+Evaluation always checks mutation cardinality, requires the reported count to
+equal the number of executed mutation records, and rejects every executed
+mutation outside the allowed set. An `atMost: 1` contract therefore accepts
+zero executions. Exact-positive and positive-lower-bound contracts additionally
+require a non-empty allowed set, but they do not require every allowed
+alternative to execute. The minimal runtime is recommendation-only, reports no
+executed mutations, and cannot preflight a positive-lower-bound mutation
+contract.
 
 ## Preflight contract
 

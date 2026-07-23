@@ -87,7 +87,8 @@ async def run_matrix(
             else None
         )
         scenario_mutation_types = [
-            item.action_type.value for item in scenario.spec.expected.mutations.actions
+            item.action_type.value
+            for item in scenario.spec.expected.mutations.allowed_actions
         ]
         requirements.update(scenario_requirements)
         capabilities.update(scenario_capabilities)

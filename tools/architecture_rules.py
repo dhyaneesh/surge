@@ -32,6 +32,7 @@ MODEL_CLIENT_MODULES = {
     "openai",
 }
 MCP_CLIENT_MODULES = {"mcp", "signoz_mcp", "signoz-mcp"}
+EXECUTION_CLIENT_MODULES = {"nats", "temporalio"}
 MUTATION_PROVIDER_SYMBOLS = {
     "GitOpsRollbackProvider",
     "KubernetesMutationProvider",
@@ -279,6 +280,48 @@ def _check_source(
     is_scaler = _is_under(parts, "services", "keda-scaler") or _is_under(
         parts, "services", "keda_scaler"
     )
+    is_guardian_application = _is_under(parts, "apps", "guardian_api") or _is_under(
+        parts, "apps", "guardian-api"
+    )
+    if is_guardian_application:
+        for reference in imports:
+            if _module_matches(reference.module, MODEL_CLIENT_MODULES):
+                _add(
+                    violations,
+                    "ARCH-GUARDIAN-NO-MODEL-CLIENT",
+                    relative,
+                    reference.line,
+                    f"Guardian application imports model client {reference.module!r}",
+                    "Keep classification, eligibility, policy, and action gates deterministic.",
+                )
+            if _provider_import(reference):
+                _add(
+                    violations,
+                    "ARCH-GUARDIAN-NO-ACTION-PROVIDER",
+                    relative,
+                    reference.line,
+                    "Guardian application imports an action or mutation provider",
+                    "Keep execution providers behind the dedicated action controller.",
+                )
+            if _module_matches(reference.module, EXECUTION_CLIENT_MODULES):
+                _add(
+                    violations,
+                    "ARCH-GUARDIAN-NO-EXECUTION-CLIENT",
+                    relative,
+                    reference.line,
+                    f"Guardian application imports execution client {reference.module!r}",
+                    "Keep NATS and Temporal execution behind dedicated service boundaries.",
+                )
+        if tree is not None:
+            for line in _python_write_client_lines(tree, imports):
+                _add(
+                    violations,
+                    "ARCH-GUARDIAN-NO-WRITE-CLIENT",
+                    relative,
+                    line,
+                    "Guardian application imports or initializes a write-capable Kubernetes client",
+                    "Remove Kubernetes write credentials and delegate execution to the action controller.",
+                )
     for reference in imports:
         if _module_matches(reference.module, MCP_CLIENT_MODULES):
             _add(

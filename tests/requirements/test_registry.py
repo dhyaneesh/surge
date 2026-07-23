@@ -87,6 +87,36 @@ def issue_codes(registry: dict) -> set[str]:
 
 
 class RegistryValidationTests(unittest.TestCase):
+    def test_registry_tracks_local_http_auth_as_non_normative_design(self) -> None:
+        repository_root = Path(__file__).resolve().parents[2]
+        registry = yaml.safe_load(
+            (repository_root / "docs/requirements/requirements.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        capabilities = {item["id"]: item for item in registry["design_capabilities"]}
+        capability = capabilities["DESIGN-RUNTIME-002"]
+        self.assertEqual(
+            {
+                "apps/guardian_api/http.py",
+                "apps/guardian_api/__main__.py",
+                "apps/guardian_api/models.py",
+                "apps/guardian_api/service.py",
+                "apps/guardian_api/store.py",
+            },
+            set(capability["implementation"]),
+        )
+        self.assertEqual(
+            {
+                "tests/integration/test_guardian_http.py",
+                "tests/security/test_guardian_http_security.py",
+                "tests/unit/test_guardian_service.py",
+            },
+            set(capability["tests"]),
+        )
+        self.assertEqual("implemented", capability["status"])
+
     def test_registry_tracks_verification_harness_as_non_normative_design(self) -> None:
         repository_root = Path(__file__).resolve().parents[2]
         registry = yaml.safe_load(

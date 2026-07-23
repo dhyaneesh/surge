@@ -1,3 +1,5 @@
+import copy
+
 from testbeds.scenarios.compatibility import (
     BlockingReason,
     EnvironmentDeclaration,
@@ -50,3 +52,44 @@ def test_preflight_serialization_is_deterministic() -> None:
     )
     first = preflight_scenario(scenario, environment).model_dump_json()
     assert first == preflight_scenario(scenario, environment).model_dump_json()
+
+
+def test_exact_positive_mutation_requires_action_controller_execution_capability() -> (
+    None
+):
+    value = copy.deepcopy(document())
+    value["spec"]["expected"]["mutations"]["count"] = {"exact": 1}
+    scenario = GuardianScenarioV1Alpha2.model_validate(value)
+    authored = scenario.spec.environment_requirements.capabilities
+
+    unsupported = preflight_scenario(
+        scenario, declaration(*(item.value for item in authored))
+    )
+    assert unsupported.status.value == "unsupported"
+    assert [item.value for item in unsupported.missing_capabilities] == [
+        "action-controller-execution"
+    ]
+
+    supported = preflight_scenario(
+        scenario,
+        declaration(*(item.value for item in authored), "action-controller-execution"),
+    )
+    assert supported.status.value == "supported"
+
+
+def test_at_least_positive_mutation_requires_action_controller_execution_capability() -> (
+    None
+):
+    value = copy.deepcopy(document())
+    value["spec"]["expected"]["mutations"]["count"] = {"atLeast": 1}
+    scenario = GuardianScenarioV1Alpha2.model_validate(value)
+    authored = scenario.spec.environment_requirements.capabilities
+
+    result = preflight_scenario(
+        scenario, declaration(*(item.value for item in authored))
+    )
+
+    assert result.status.value == "unsupported"
+    assert [item.value for item in result.missing_capabilities] == [
+        "action-controller-execution"
+    ]
