@@ -57,6 +57,20 @@ class CriticalIntegrityFailure(StrEnum):
     COMPARISON_INVALID = "comparison-invalid"
 
 
+class RequiredSignal(StrEnum):
+    REQUEST_RATE = "request_rate"
+    CPU_UTILIZATION = "cpu_utilization"
+    MEMORY_UTILIZATION = "memory_utilization"
+    THROTTLING_RATIO = "throttling_ratio"
+    OOM_KILLED = "oom_killed"
+    RESTART_DELTA = "restart_delta"
+    DEPLOYMENT_VERSION = "deployment_version"
+    ERROR_RATE = "error_rate"
+    P95_LATENCY_MS = "p95_latency_ms"
+    TOPOLOGY_EDGE = "topology_edge"
+    DEPENDENCY_HEALTHY = "dependency_healthy"
+
+
 class PolicyState(StrEnum):
     FRESH = "fresh"
     RESTRICTED = "restricted"
@@ -168,6 +182,8 @@ class TelemetryFacts(StrictModel):
     quality: UnitFloat
     newest_required_sample_at: AwareDatetime
     freshness_seconds: int = Field(gt=0)
+    required_signals: frozenset[RequiredSignal]
+    clock_skew_seconds: float = Field(allow_inf_nan=False)
     required_sample_count: int = Field(ge=1)
     usable_sample_count: int = Field(ge=0)
     pipeline_available: bool

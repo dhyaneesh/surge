@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from apps.guardian_api.models import (
     ActionType,
     CriticalIntegrityFailure,
+    EvidenceFreshness,
     GuardianProjection,
     HypothesisName,
     IncidentClass,
@@ -19,7 +20,7 @@ from apps.guardian_api.models import (
     TelemetryFacts,
     WorkflowState,
 )
-from apps.guardian_api.rules import score_hypotheses
+from apps.guardian_api.rules import ALLOWED_SOURCES_BY_SIGNAL, score_hypotheses
 
 
 ACTION_BY_HYPOTHESIS = {
@@ -70,6 +71,7 @@ def _integrity_failures(
         telemetry.newest_required_sample_at - observed_at > timedelta(seconds=60)
         or telemetry.newest_required_sample_at - now > timedelta(seconds=60)
         or observed_at - now > timedelta(seconds=60)
+        or abs(telemetry.clock_skew_seconds) > 60
     ):
         failures.append(CriticalIntegrityFailure.TIMESTAMP_SKEW)
     if telemetry.usable_sample_count == 0:
@@ -93,12 +95,42 @@ def _discriminatory_groups(hypotheses: tuple) -> tuple[str, ...]:
 
 
 def _evidence_integrity_failures(
-    facts: IncidentFacts,
+    facts: IncidentFacts, *, now: datetime
 ) -> tuple[CriticalIntegrityFailure, ...]:
     failures: list[CriticalIntegrityFailure] = []
     evidence_items = facts.signals.evidence_items()
+    evidence_by_signal = dict(evidence_items)
+    required_signals = {
+        signal.value if hasattr(signal, "value") else str(signal)
+        for signal in facts.telemetry.required_signals
+    }
     if any(item.usable_samples == 0 for _, item in evidence_items):
         failures.append(CriticalIntegrityFailure.ZERO_SAMPLES)
+    for signal_name in required_signals:
+        evidence = evidence_by_signal.get(signal_name)
+        if (
+            evidence is None
+            or evidence.usable_samples == 0
+            or evidence.freshness is EvidenceFreshness.MISSING
+            or evidence.source not in ALLOWED_SOURCES_BY_SIGNAL[signal_name]
+        ):
+            if CriticalIntegrityFailure.ZERO_SAMPLES not in failures:
+                failures.append(CriticalIntegrityFailure.ZERO_SAMPLES)
+            continue
+        if evidence.observed_at - now > timedelta(
+            seconds=60
+        ) or evidence.observed_at - facts.observed_at > timedelta(seconds=60):
+            if CriticalIntegrityFailure.TIMESTAMP_SKEW not in failures:
+                failures.append(CriticalIntegrityFailure.TIMESTAMP_SKEW)
+        if (
+            evidence.freshness is EvidenceFreshness.STALE
+            or now - evidence.observed_at
+            > timedelta(seconds=2 * facts.telemetry.freshness_seconds)
+        ):
+            if CriticalIntegrityFailure.SAMPLE_STALE not in failures:
+                failures.append(CriticalIntegrityFailure.SAMPLE_STALE)
+        if evidence.freshness is EvidenceFreshness.CONFLICTING:
+            failures.append(CriticalIntegrityFailure.COMPARISON_INVALID)
     if facts.identity is not None and any(
         name in TARGET_CORRELATED_SIGNALS
         and item.subject_role != facts.identity.target_role
@@ -171,7 +203,7 @@ def evaluate_incident(
         observed_at=facts.observed_at,
         now=now,
     )
-    for failure in _evidence_integrity_failures(facts):
+    for failure in _evidence_integrity_failures(facts, now=now):
         if failure not in failures:
             failures = (*failures, failure)
     foreign_evidence = any(

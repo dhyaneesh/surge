@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
+import apps.guardian_api.models as guardian_models
 from apps.guardian_api.domain import evaluate_incident
 from apps.guardian_api.models import (
     ActionType,
@@ -130,6 +131,8 @@ def base_facts(**changes: object) -> IncidentFacts:
             quality=1.0,
             newest_required_sample_at=NOW,
             freshness_seconds=60,
+            required_signals=frozenset(),
+            clock_skew_seconds=0,
             required_sample_count=10,
             usable_sample_count=10,
             pipeline_available=True,
@@ -332,6 +335,79 @@ def test_zero_samples_on_candidate_evidence_is_critical() -> None:
     assert CriticalIntegrityFailure.ZERO_SAMPLES in projection.integrity_failures
 
 
+def test_absent_required_signal_is_critical_even_with_aggregate_samples() -> None:
+    telemetry = base_facts().telemetry.model_copy(
+        update={"required_signals": frozenset({"memory_utilization"})}
+    )
+    projection = evaluate_incident(
+        base_facts(
+            telemetry=telemetry,
+            signals=SignalFacts(
+                request_rate=numeric(200, baseline=100, group="load"),
+                cpu_utilization=numeric(0.85, group="util"),
+            ),
+        ),
+        now=NOW,
+    )
+    assert projection.incident_class is IncidentClass.TELEMETRY_FAILURE
+    assert CriticalIntegrityFailure.ZERO_SAMPLES in projection.integrity_failures
+
+
+def test_required_signal_set_uses_a_typed_enum() -> None:
+    required_signal = getattr(guardian_models, "RequiredSignal", None)
+    assert required_signal is not None
+    telemetry = base_facts().telemetry.model_copy(
+        update={"required_signals": frozenset({required_signal.REQUEST_RATE})}
+    )
+    assert telemetry.required_signals == frozenset({required_signal.REQUEST_RATE})
+
+
+def test_required_signal_marked_missing_is_not_present() -> None:
+    required_signal = guardian_models.RequiredSignal
+    telemetry = base_facts().telemetry.model_copy(
+        update={"required_signals": frozenset({required_signal.MEMORY_UTILIZATION})}
+    )
+    missing_memory = numeric(0.5, group="memory").model_copy(
+        update={"freshness": EvidenceFreshness.MISSING}
+    )
+    projection = evaluate_incident(
+        base_facts(
+            telemetry=telemetry,
+            signals=SignalFacts(
+                request_rate=numeric(200, baseline=100, group="load"),
+                cpu_utilization=numeric(0.85, group="util"),
+                memory_utilization=missing_memory,
+            ),
+        ),
+        now=NOW,
+    )
+    assert projection.incident_class is IncidentClass.TELEMETRY_FAILURE
+    assert CriticalIntegrityFailure.ZERO_SAMPLES in projection.integrity_failures
+
+
+def test_required_signal_more_than_sixty_seconds_in_future_has_clock_skew() -> None:
+    required_signal = guardian_models.RequiredSignal
+    telemetry = base_facts().telemetry.model_copy(
+        update={"required_signals": frozenset({required_signal.MEMORY_UTILIZATION})}
+    )
+    future_memory = numeric(0.5, group="memory").model_copy(
+        update={"observed_at": NOW + timedelta(seconds=61)}
+    )
+    projection = evaluate_incident(
+        base_facts(
+            telemetry=telemetry,
+            signals=SignalFacts(
+                request_rate=numeric(200, baseline=100, group="load"),
+                cpu_utilization=numeric(0.85, group="util"),
+                memory_utilization=future_memory,
+            ),
+        ),
+        now=NOW,
+    )
+    assert projection.incident_class is IncidentClass.TELEMETRY_FAILURE
+    assert CriticalIntegrityFailure.TIMESTAMP_SKEW in projection.integrity_failures
+
+
 @pytest.mark.parametrize(
     ("changes", "failure"),
     [
@@ -342,6 +418,8 @@ def test_zero_samples_on_candidate_evidence_is_critical() -> None:
                     quality=1,
                     newest_required_sample_at=NOW - timedelta(seconds=121),
                     freshness_seconds=60,
+                    required_signals=frozenset(),
+                    clock_skew_seconds=0,
                     required_sample_count=10,
                     usable_sample_count=10,
                     pipeline_available=True,
@@ -356,6 +434,8 @@ def test_zero_samples_on_candidate_evidence_is_critical() -> None:
                     quality=1,
                     newest_required_sample_at=NOW + timedelta(seconds=61),
                     freshness_seconds=60,
+                    required_signals=frozenset(),
+                    clock_skew_seconds=0,
                     required_sample_count=10,
                     usable_sample_count=10,
                     pipeline_available=True,
@@ -370,6 +450,8 @@ def test_zero_samples_on_candidate_evidence_is_critical() -> None:
                     quality=1,
                     newest_required_sample_at=NOW,
                     freshness_seconds=60,
+                    required_signals=frozenset(),
+                    clock_skew_seconds=0,
                     required_sample_count=10,
                     usable_sample_count=0,
                     pipeline_available=True,
@@ -438,6 +520,28 @@ def test_unhealthy_telemetry_never_becomes_unknown() -> None:
         now=NOW + timedelta(minutes=10),
     )
     assert projection.incident_class is IncidentClass.TELEMETRY_FAILURE
+
+
+@pytest.mark.parametrize(
+    ("update", "failure"),
+    [
+        (
+            {"pipeline_available": False},
+            CriticalIntegrityFailure.PIPELINE_UNAVAILABLE,
+        ),
+        (
+            {"comparison_valid": False},
+            CriticalIntegrityFailure.COMPARISON_INVALID,
+        ),
+    ],
+)
+def test_remaining_critical_integrity_statuses_fail_closed(
+    update: dict[str, object], failure: CriticalIntegrityFailure
+) -> None:
+    telemetry = base_facts().telemetry.model_copy(update=update)
+    projection = evaluate_incident(base_facts(telemetry=telemetry), now=NOW)
+    assert projection.incident_class is IncidentClass.TELEMETRY_FAILURE
+    assert failure in projection.integrity_failures
 
 
 def test_mutually_exclusive_actions_enter_conflict_resolution() -> None:
@@ -854,6 +958,18 @@ def test_ratio_signals_reject_values_above_one(field: str) -> None:
 def test_timestamp_skew_is_derived_from_sample_time() -> None:
     telemetry = base_facts().telemetry.model_copy(
         update={"newest_required_sample_at": NOW + timedelta(seconds=61)}
+    )
+    projection = evaluate_incident(base_facts(telemetry=telemetry), now=NOW)
+    assert projection.incident_class is IncidentClass.TELEMETRY_FAILURE
+    assert CriticalIntegrityFailure.TIMESTAMP_SKEW in projection.integrity_failures
+
+
+@pytest.mark.parametrize("clock_skew_seconds", [-61.0, 61.0])
+def test_independently_measured_clock_skew_fails_in_either_direction(
+    clock_skew_seconds: float,
+) -> None:
+    telemetry = base_facts().telemetry.model_copy(
+        update={"clock_skew_seconds": clock_skew_seconds}
     )
     projection = evaluate_incident(base_facts(telemetry=telemetry), now=NOW)
     assert projection.incident_class is IncidentClass.TELEMETRY_FAILURE
