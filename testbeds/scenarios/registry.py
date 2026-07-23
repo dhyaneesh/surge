@@ -88,6 +88,9 @@ def _evidence_provider(
             workload_kind=workload_kind,
             workload_name=workload_name,
             workload_role=workload_role,
+            # Resource Metrics API evidence requires GUARDIAN_EVIDENCE_METRICS_POD
+            # (with optional configured resource limits); absent a pod target it
+            # fails closed rather than fabricating utilization.
             metrics_pod_name=os.getenv("GUARDIAN_EVIDENCE_METRICS_POD"),
             rollout_name=rollout_name,
             scaled_object_name=scaled_object_name,

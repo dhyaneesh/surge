@@ -6,6 +6,7 @@ import asyncio
 import copy
 import json
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, Sequence, cast
 
 import pytest
@@ -111,6 +112,23 @@ def _load_scenario() -> GuardianScenarioV1Alpha2:
         }
     )
     return GuardianScenarioV1Alpha2.model_validate(payload)
+
+
+def test_registry_uses_metrics_pod_environment_override(monkeypatch) -> None:
+    from testbeds.scenarios.registry import _evidence_provider
+
+    monkeypatch.setenv("GUARDIAN_EVIDENCE_METRICS_POD", "configured-metrics-pod")
+
+    provider = _evidence_provider(
+        SimpleNamespace(namespace="guardian-test", _runner=object()),
+        environment="otel-demo",
+        workload_kind="deployment",
+        workload_name="checkout",
+        workload_role="request-processor",
+        endpoint_service="frontend",
+    )
+
+    assert provider.targets.metrics_pod_name == "configured-metrics-pod"
 
 
 def test_collector_provider_samples_after_assessment_request(

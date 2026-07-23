@@ -258,8 +258,41 @@ def test_lifecycle_persists_distinct_assessment_and_recovery_evidence(
 
     assessment = json.loads(assessment_path.read_text())
     recovery = json.loads(recovery_path.read_text())
-    assert assessment[0]["observed_at"] != recovery[0]["observed_at"]
-    assert assessment[0]["provenance_ref"] != recovery[0]["provenance_ref"]
+    assessment_endpoint = next(
+        evidence
+        for evidence in assessment
+        if evidence["source_kind"] == "endpoint-probe"
+    )
+    recovery_endpoint = next(
+        evidence for evidence in recovery if evidence["source_kind"] == "endpoint-probe"
+    )
+    assessment_telemetry = next(
+        evidence
+        for evidence in assessment
+        if evidence["source_kind"] == "signoz-telemetry"
+    )
+    recovery_telemetry = next(
+        evidence
+        for evidence in recovery
+        if evidence["source_kind"] == "signoz-telemetry"
+    )
+    assert assessment_endpoint["observed_at"] != recovery_endpoint["observed_at"]
+    assert assessment_endpoint["provenance_ref"].startswith("endpoint-probe/")
+    assert assessment_endpoint["provenance_ref"].endswith("/assessment")
+    assert recovery_endpoint["provenance_ref"].endswith("/recovery")
+    assert recovery_endpoint["provenance_ref"] != assessment_endpoint["provenance_ref"]
+    assert assessment_endpoint["values"]["request_rate"] > 0
+    assert recovery_endpoint["values"]["request_rate"] > 0
+    assert assessment_telemetry["provenance_ref"].startswith(
+        "signoz/approved-telemetry-arrival/"
+    )
+    assert assessment_telemetry["provenance_ref"].endswith("/assessment")
+    assert recovery_telemetry["provenance_ref"].endswith("/recovery")
+    assert (
+        recovery_telemetry["provenance_ref"] != assessment_telemetry["provenance_ref"]
+    )
+    assert assessment_telemetry["values"]["quality"] == 1.0
+    assert recovery_telemetry["values"]["quality"] == 1.0
     assert len(command_runner.calls) == 4
     assert http_runner.probe_calls == 6
     assert signoz_contract.calls == 2
