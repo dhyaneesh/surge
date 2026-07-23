@@ -21,10 +21,16 @@ class EvidenceSourceKind(StrEnum):
     RABBITMQ_QUEUE = "rabbitmq-queue"
     KEDA_SCALER = "keda-scaler"
     SIGNOZ_TELEMETRY = "signoz-telemetry"
+    # Typed test-control fixtures (policy bundles, approvals, action results).
+    # These are not collector samples; scenarios that require them must declare
+    # this source or preflight fails closed before install.
+    CONTROL_FIXTURE = "control-fixture"
 
 
-# Collector contracts: each evidence type is satisfied when the declaration
-# provides at least one listed source.
+# Collector/control contracts: each evidence type is satisfied when the
+# declaration provides at least one listed source. Unmapped types must not
+# occur; POLICY_DECISION and ACTION_RESULT are explicitly gated via
+# CONTROL_FIXTURE so they cannot silently skip install preflight.
 EVIDENCE_TYPE_SOURCES: dict[EvidenceType, frozenset[EvidenceSourceKind]] = {
     EvidenceType.METRICS: frozenset({EvidenceSourceKind.ENDPOINT_PROBE}),
     EvidenceType.LOAD: frozenset({EvidenceSourceKind.ENDPOINT_PROBE}),
@@ -45,6 +51,8 @@ EVIDENCE_TYPE_SOURCES: dict[EvidenceType, frozenset[EvidenceSourceKind]] = {
     EvidenceType.TELEMETRY_QUALITY: frozenset({EvidenceSourceKind.SIGNOZ_TELEMETRY}),
     EvidenceType.TRACES: frozenset({EvidenceSourceKind.SIGNOZ_TELEMETRY}),
     EvidenceType.LOGS: frozenset({EvidenceSourceKind.SIGNOZ_TELEMETRY}),
+    EvidenceType.POLICY_DECISION: frozenset({EvidenceSourceKind.CONTROL_FIXTURE}),
+    EvidenceType.ACTION_RESULT: frozenset({EvidenceSourceKind.CONTROL_FIXTURE}),
 }
 
 # Capabilities that claim observational power must be backed by these sources.
@@ -119,6 +127,8 @@ def missing_evidence_sources_for_scenario(
     for evidence_type in scenario_evidence_types(scenario):
         allowed = EVIDENCE_TYPE_SOURCES.get(evidence_type)
         if allowed is None:
+            # Unknown evidence types fail closed by requiring an empty set match.
+            missing.add(EvidenceSourceKind.CONTROL_FIXTURE)
             continue
         if not (allowed & available):
             missing |= set(allowed)

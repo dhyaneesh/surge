@@ -306,7 +306,6 @@ scenarios:
         missingCapabilities:
         - deployment-transition
         - progressive-delivery
-        - recovery-observation
         requiredAdapterOperations:
         - deploy-version
         - observe-state
@@ -322,7 +321,6 @@ scenarios:
         - deploy-version
         missingObservations:
         - deployment-version
-        - recovery-evidence
         requiredEvidenceSources:
         - endpoint-probe
         - kubernetes-workload
@@ -334,7 +332,6 @@ scenarios:
         missingCapabilities:
         - deployment-transition
         - progressive-delivery
-        - recovery-observation
         requiredAdapterOperations:
         - deploy-version
         - observe-state
@@ -350,7 +347,6 @@ scenarios:
         - deploy-version
         missingObservations:
         - deployment-version
-        - recovery-evidence
         requiredEvidenceSources:
         - endpoint-probe
         - kubernetes-workload
@@ -449,7 +445,6 @@ scenarios:
         missingCapabilities:
         - deployment-transition
         - progressive-delivery
-        - recovery-observation
         requiredAdapterOperations:
         - deploy-version
         - observe-state
@@ -466,7 +461,6 @@ scenarios:
         - deploy-version
         missingObservations:
         - deployment-version
-        - recovery-evidence
         requiredEvidenceSources:
         - endpoint-probe
         - kubernetes-workload
@@ -478,7 +472,6 @@ scenarios:
         missingCapabilities:
         - deployment-transition
         - progressive-delivery
-        - recovery-observation
         requiredAdapterOperations:
         - deploy-version
         - observe-state
@@ -495,7 +488,6 @@ scenarios:
         - deploy-version
         missingObservations:
         - deployment-version
-        - recovery-evidence
         requiredEvidenceSources:
         - endpoint-probe
         - kubernetes-workload
@@ -984,10 +976,8 @@ scenarios:
         blockingReasons:
         - evidence-source-unavailable
       online-boutique:
-        status: unsupported
-        missingCapabilities:
-        - horizontal-scaling
-        - recovery-observation
+        status: supported
+        missingCapabilities: []
         requiredAdapterOperations:
         - apply-load
         - observe-state
@@ -1001,8 +991,7 @@ scenarios:
         - workflow-state
         - workload-state
         missingAdapterOperations: []
-        missingObservations:
-        - recovery-evidence
+        missingObservations: []
         requiredEvidenceSources:
         - endpoint-probe
         - kubernetes-workload
@@ -1010,10 +999,8 @@ scenarios:
         missingEvidenceSources: []
         blockingReasons: []
       otel-demo:
-        status: unsupported
-        missingCapabilities:
-        - horizontal-scaling
-        - recovery-observation
+        status: supported
+        missingCapabilities: []
         requiredAdapterOperations:
         - apply-load
         - observe-state
@@ -1027,8 +1014,7 @@ scenarios:
         - workflow-state
         - workload-state
         missingAdapterOperations: []
-        missingObservations:
-        - recovery-evidence
+        missingObservations: []
         requiredEvidenceSources:
         - endpoint-probe
         - kubernetes-workload
@@ -1222,8 +1208,6 @@ scenarios:
       online-boutique:
         status: unsupported
         missingCapabilities:
-        - horizontal-scaling
-        - recovery-observation
         - resource-pressure
         requiredAdapterOperations:
         - inject-fault
@@ -1238,8 +1222,7 @@ scenarios:
         - workflow-state
         - workload-state
         missingAdapterOperations: []
-        missingObservations:
-        - recovery-evidence
+        missingObservations: []
         requiredEvidenceSources:
         - endpoint-probe
         - kubernetes-workload
@@ -1249,8 +1232,6 @@ scenarios:
       otel-demo:
         status: unsupported
         missingCapabilities:
-        - horizontal-scaling
-        - recovery-observation
         - resource-pressure
         requiredAdapterOperations:
         - inject-fault
@@ -1265,8 +1246,7 @@ scenarios:
         - workflow-state
         - workload-state
         missingAdapterOperations: []
-        missingObservations:
-        - recovery-evidence
+        missingObservations: []
         requiredEvidenceSources:
         - endpoint-probe
         - kubernetes-workload
@@ -1368,9 +1348,7 @@ scenarios:
         status: unsupported
         missingCapabilities:
         - deployment-transition
-        - horizontal-scaling
         - progressive-delivery
-        - recovery-observation
         requiredAdapterOperations:
         - apply-load
         - deploy-version
@@ -1388,7 +1366,6 @@ scenarios:
         - deploy-version
         missingObservations:
         - deployment-version
-        - recovery-evidence
         requiredEvidenceSources:
         - endpoint-probe
         - kubernetes-workload
@@ -1399,9 +1376,7 @@ scenarios:
         status: unsupported
         missingCapabilities:
         - deployment-transition
-        - horizontal-scaling
         - progressive-delivery
-        - recovery-observation
         requiredAdapterOperations:
         - apply-load
         - deploy-version
@@ -1419,7 +1394,6 @@ scenarios:
         - deploy-version
         missingObservations:
         - deployment-version
-        - recovery-evidence
         requiredEvidenceSources:
         - endpoint-probe
         - kubernetes-workload
@@ -1731,7 +1705,6 @@ scenarios:
       online-boutique:
         status: unsupported
         missingCapabilities:
-        - recovery-observation
         - telemetry-interruption
         requiredAdapterOperations:
         - interrupt-telemetry
@@ -1747,7 +1720,6 @@ scenarios:
         missingAdapterOperations:
         - interrupt-telemetry
         missingObservations:
-        - recovery-evidence
         - telemetry-quality
         requiredEvidenceSources:
         - signoz-telemetry
@@ -1758,7 +1730,6 @@ scenarios:
       otel-demo:
         status: unsupported
         missingCapabilities:
-        - recovery-observation
         - telemetry-interruption
         requiredAdapterOperations:
         - interrupt-telemetry
@@ -1774,7 +1745,6 @@ scenarios:
         missingAdapterOperations:
         - interrupt-telemetry
         missingObservations:
-        - recovery-evidence
         - telemetry-quality
         requiredEvidenceSources:
         - signoz-telemetry

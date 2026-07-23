@@ -104,15 +104,11 @@ class SignozEvidenceClient:
                 }
             ]
         }
-        # Structural HTTP runner carries the OTLP JSON payload in a fixed header
-        # key so allowlisted runners never interpolate model-controlled argv.
-        await self._http.probe(
+        await self._http.post_json(
             f"{self._otlp}/v1/metrics",
+            payload,
             timeout=self._timeout,
-            headers={
-                "Content-Type": "application/json",
-                "X-Guardian-OTLP-Payload": json.dumps(payload),
-            },
+            headers={"Content-Type": "application/json"},
         )
         return {
             "available": available,
@@ -213,7 +209,7 @@ def _identity_attributes(identity: Mapping[str, Any]) -> dict[str, str]:
 
 
 class UrllibHttpProbeRunner:
-    """Standard-library HTTP probe used by real testbed runs."""
+    """Standard-library HTTP probe/export used by real testbed runs."""
 
     async def probe(
         self,
@@ -222,27 +218,56 @@ class UrllibHttpProbeRunner:
         timeout: timedelta,
         headers: Mapping[str, str] | None = None,
     ) -> ProbeResult:
+        return await self._request(
+            url, method="GET", timeout=timeout, headers=headers, body=None
+        )
+
+    async def post_json(
+        self,
+        url: str,
+        payload: Mapping[str, Any],
+        *,
+        timeout: timedelta,
+        headers: Mapping[str, str] | None = None,
+    ) -> ProbeResult:
+        request_headers = {"Content-Type": "application/json", **dict(headers or {})}
+        return await self._request(
+            url,
+            method="POST",
+            timeout=timeout,
+            headers=request_headers,
+            body=json.dumps(payload).encode("utf-8"),
+        )
+
+    async def _request(
+        self,
+        url: str,
+        *,
+        method: str,
+        timeout: timedelta,
+        headers: Mapping[str, str] | None,
+        body: bytes | None,
+    ) -> ProbeResult:
         def invoke() -> ProbeResult:
             started = time.monotonic()
-            request_headers = dict(headers or {})
-            payload = request_headers.pop("X-Guardian-OTLP-Payload", None)
-            body_bytes = payload.encode("utf-8") if payload is not None else None
             http_request = request.Request(
                 url,
-                data=body_bytes,
-                method="POST" if body_bytes is not None else "GET",
-                headers=request_headers,
+                data=body,
+                method=method,
+                headers=dict(headers or {}),
             )
             try:
                 with request.urlopen(
                     http_request, timeout=timeout.total_seconds()
                 ) as response:
-                    body = response.read().decode("utf-8", errors="replace")
+                    response_body = response.read().decode("utf-8", errors="replace")
                     status = int(getattr(response, "status", 200))
             except error.HTTPError as exc:
-                body = exc.read().decode("utf-8", errors="replace")
+                response_body = exc.read().decode("utf-8", errors="replace")
                 status = int(exc.code)
             latency_ms = (time.monotonic() - started) * 1000.0
-            return ProbeResult(status_code=status, latency_ms=latency_ms, body=body)
+            return ProbeResult(
+                status_code=status, latency_ms=latency_ms, body=response_body
+            )
 
         return await asyncio.to_thread(invoke)

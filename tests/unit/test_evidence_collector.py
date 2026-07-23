@@ -26,7 +26,15 @@ from testbeds.evidence.contracts import (
 )
 from testbeds.evidence.signoz import SignozEvidenceClient
 from testbeds.environments.capabilities import ENVIRONMENT_DECLARATIONS
-from testbeds.models import LoadExecution, LoadProfile
+from testbeds.models import (
+    EnvironmentState,
+    FaultExecution,
+    FaultSpecification,
+    FaultType,
+    LoadExecution,
+    LoadProfile,
+    WorkloadSelector,
+)
 from testbeds.scenarios.compatibility import (
     BlockingReason,
     CompatibilityStatus,
@@ -75,10 +83,12 @@ class FakeCommandRunner:
 class FakeHttpRunner:
     responses: list[Any]
     calls: list[tuple[str, timedelta, Mapping[str, str] | None]]
+    posts: list[tuple[str, Mapping[str, Any], timedelta]]
 
     def __init__(self, responses: Sequence[Any] = ()):
         self.responses = list(responses)
         self.calls = []
+        self.posts = []
 
     async def probe(
         self,
@@ -90,6 +100,22 @@ class FakeHttpRunner:
         self.calls.append((url, timeout, headers))
         if not self.responses:
             return ProbeResult(status_code=200, latency_ms=12.5, body="")
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    async def post_json(
+        self,
+        url: str,
+        payload: Mapping[str, Any],
+        *,
+        timeout: timedelta,
+        headers: Mapping[str, str] | None = None,
+    ) -> ProbeResult:
+        self.posts.append((url, dict(payload), timeout))
+        if not self.responses:
+            return ProbeResult(status_code=200, latency_ms=3.0, body="{}")
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
@@ -115,6 +141,8 @@ def test_evidence_type_contracts_map_to_deterministic_sources() -> None:
     assert EvidenceType.LOAD in EVIDENCE_TYPE_SOURCES
     assert EvidenceType.METRICS in EVIDENCE_TYPE_SOURCES
     assert EvidenceType.RESOURCE_UTILIZATION in EVIDENCE_TYPE_SOURCES
+    assert EvidenceType.POLICY_DECISION in EVIDENCE_TYPE_SOURCES
+    assert EvidenceType.ACTION_RESULT in EVIDENCE_TYPE_SOURCES
     assert EvidenceSourceKind.ENDPOINT_PROBE in EVIDENCE_TYPE_SOURCES[EvidenceType.LOAD]
     assert (
         EvidenceSourceKind.METRICS_API
@@ -124,17 +152,38 @@ def test_evidence_type_contracts_map_to_deterministic_sources() -> None:
         EvidenceSourceKind.SIGNOZ_TELEMETRY
         in EVIDENCE_TYPE_SOURCES[EvidenceType.TELEMETRY_QUALITY]
     )
+    assert (
+        EvidenceSourceKind.CONTROL_FIXTURE
+        in EVIDENCE_TYPE_SOURCES[EvidenceType.POLICY_DECISION]
+    )
+    assert (
+        EvidenceSourceKind.CONTROL_FIXTURE
+        in EVIDENCE_TYPE_SOURCES[EvidenceType.ACTION_RESULT]
+    )
 
 
 def test_control_execution_alone_is_never_symptom_evidence() -> None:
     load = LoadExecution(profile=LoadProfile(concurrent_users=20), active=True)
+    fault = FaultExecution(
+        fault=FaultSpecification(
+            fault_type=FaultType.HIGH_CPU,
+            target=WorkloadSelector(role="request-processor"),
+            magnitude=1.0,
+        ),
+        active=True,
+    )
+    healthy_state = EnvironmentState(environment="otel-demo", healthy=True)
     assert control_result_is_not_symptom_evidence(load) is True
+    assert control_result_is_not_symptom_evidence(fault) is True
+    assert control_result_is_not_symptom_evidence(healthy_state) is True
     collector = EvidenceCollector(
         command_runner=FakeCommandRunner(),
         http_runner=FakeHttpRunner(),
         clock=lambda: NOW,
     )
     assert collector.symptom_evidence_from_control(load) == ()
+    assert collector.symptom_evidence_from_control(fault) == ()
+    assert collector.symptom_evidence_from_control(healthy_state) == ()
 
 
 def test_endpoint_probe_attaches_latency_status_timestamp_and_provenance() -> None:
@@ -377,6 +426,12 @@ def test_signoz_queries_require_matching_identity_attributes() -> None:
     )
     assert export["latency_ms"] > 0
     assert export["available"] is True
+    assert len(http.posts) == 1
+    assert http.posts[0][0].endswith("/v1/metrics")
+    assert "resourceMetrics" in http.posts[0][1]
+    assert not any(
+        headers and "X-Guardian-OTLP-Payload" in headers for _, _, headers in http.calls
+    )
     arrival = asyncio.run(
         client.query_telemetry_arrival(
             identity=_identity(), lookback=timedelta(minutes=5)
@@ -385,6 +440,215 @@ def test_signoz_queries_require_matching_identity_attributes() -> None:
     assert arrival.matched is True
     assert arrival.values["service.name"] == "frontend"
     assert arrival.values["service.version"] == "1.2.3"
+
+
+def test_signoz_identity_version_mismatch_fails_closed() -> None:
+    http = FakeHttpRunner(
+        [
+            ProbeResult(
+                status_code=200,
+                latency_ms=9.0,
+                body=json.dumps(
+                    {
+                        "data": [
+                            {
+                                "tenant.id": "tenant-a",
+                                "deployment.environment": "otel-demo",
+                                "service.name": "frontend",
+                                "k8s.deployment.name": "frontend",
+                                "service.version": "9.9.9",
+                            }
+                        ]
+                    }
+                ),
+            )
+        ]
+    )
+    client = SignozEvidenceClient(
+        otlp_endpoint="http://signoz-otel:4318",
+        query_endpoint="http://signoz:8080",
+        http_runner=http,
+        clock=lambda: NOW,
+    )
+    arrival = asyncio.run(
+        client.query_service_version(
+            identity=_identity(), lookback=timedelta(minutes=5)
+        )
+    )
+    assert arrival.matched is False
+    assert arrival.values == {}
+    assert "did not match" in arrival.diagnostics
+
+
+def test_empty_kubernetes_payload_is_unavailable_not_zero_sample() -> None:
+    runner = FakeCommandRunner([CommandResult(("kubectl",), 0, "", "", 0.02)])
+    collector = EvidenceCollector(
+        command_runner=runner, http_runner=FakeHttpRunner(), clock=lambda: NOW
+    )
+    sample = asyncio.run(
+        collector.sample_kubernetes_workload(
+            namespace="otel-demo",
+            workload_kind="Deployment",
+            workload_name="frontend",
+            identity=_identity(),
+        )
+    )
+    assert isinstance(sample, UnavailableEvidence)
+    assert sample.source_kind is EvidenceSourceKind.KUBERNETES_WORKLOAD
+    assert "desired_replicas" not in getattr(sample, "values", {})
+
+
+def test_partial_kubernetes_payload_without_replicas_is_unavailable() -> None:
+    payload = {
+        "metadata": {"name": "frontend"},
+        "spec": {
+            "template": {"spec": {"containers": [{"name": "frontend", "image": "x:1"}]}}
+        },
+        "status": {},
+    }
+    runner = FakeCommandRunner(
+        [CommandResult(("kubectl",), 0, json.dumps(payload), "", 0.02)]
+    )
+    collector = EvidenceCollector(
+        command_runner=runner, http_runner=FakeHttpRunner(), clock=lambda: NOW
+    )
+    sample = asyncio.run(
+        collector.sample_kubernetes_workload(
+            namespace="otel-demo",
+            workload_kind="Deployment",
+            workload_name="frontend",
+            identity=_identity(),
+        )
+    )
+    assert isinstance(sample, UnavailableEvidence)
+
+
+def test_empty_rollout_payload_is_unavailable_not_zero_sample() -> None:
+    runner = FakeCommandRunner([CommandResult(("kubectl",), 0, "{}", "", 0.02)])
+    collector = EvidenceCollector(
+        command_runner=runner, http_runner=FakeHttpRunner(), clock=lambda: NOW
+    )
+    sample = asyncio.run(
+        collector.sample_rollout(
+            namespace="argo-rollouts",
+            rollout_name="rollouts-demo",
+            identity=_identity(environment="argo-rollouts", namespace="argo-rollouts"),
+        )
+    )
+    assert isinstance(sample, UnavailableEvidence)
+    assert sample.source_kind is EvidenceSourceKind.ROLLOUT_STATE
+
+
+def test_metrics_missing_usage_fields_are_unavailable_not_zero() -> None:
+    payload = {
+        "metadata": {"name": "frontend-abc"},
+        "containers": [{"name": "frontend", "usage": {}}],
+    }
+    runner = FakeCommandRunner(
+        [CommandResult(("kubectl",), 0, json.dumps(payload), "", 0.02)]
+    )
+    collector = EvidenceCollector(
+        command_runner=runner, http_runner=FakeHttpRunner(), clock=lambda: NOW
+    )
+    sample = asyncio.run(
+        collector.sample_metrics_api(
+            namespace="otel-demo",
+            pod_name="frontend-abc",
+            identity=_identity(),
+            cpu_limit_millicores=1000,
+            memory_limit_bytes=512 * 1024 * 1024,
+        )
+    )
+    assert isinstance(sample, UnavailableEvidence)
+    assert "cpu_utilization" not in getattr(sample, "values", {})
+    assert "memory_utilization" not in getattr(sample, "values", {})
+
+
+def test_metrics_partial_usage_missing_memory_is_unavailable() -> None:
+    payload = {
+        "metadata": {"name": "frontend-abc"},
+        "containers": [{"name": "frontend", "usage": {"cpu": "100m"}}],
+    }
+    runner = FakeCommandRunner(
+        [CommandResult(("kubectl",), 0, json.dumps(payload), "", 0.02)]
+    )
+    collector = EvidenceCollector(
+        command_runner=runner, http_runner=FakeHttpRunner(), clock=lambda: NOW
+    )
+    sample = asyncio.run(
+        collector.sample_metrics_api(
+            namespace="otel-demo",
+            pod_name="frontend-abc",
+            identity=_identity(),
+            cpu_limit_millicores=1000,
+            memory_limit_bytes=512 * 1024 * 1024,
+        )
+    )
+    assert isinstance(sample, UnavailableEvidence)
+
+
+def test_rabbitmq_and_keda_empty_payloads_are_unavailable() -> None:
+    runner = FakeCommandRunner(
+        [
+            CommandResult(("kubectl",), 0, "", "", 0.02),
+            CommandResult(("kubectl",), 0, "", "", 0.02),
+        ]
+    )
+    collector = EvidenceCollector(
+        command_runner=runner, http_runner=FakeHttpRunner(), clock=lambda: NOW
+    )
+    queue = asyncio.run(
+        collector.sample_rabbitmq_queue_depth(
+            namespace="keda-rabbitmq",
+            scaled_object_name="rabbitmq-consumer",
+            identity=_identity(environment="keda-rabbitmq", namespace="keda-rabbitmq"),
+        )
+    )
+    scaler = asyncio.run(
+        collector.sample_keda_scaler(
+            namespace="keda-rabbitmq",
+            scaled_object_name="rabbitmq-consumer",
+            identity=_identity(environment="keda-rabbitmq", namespace="keda-rabbitmq"),
+        )
+    )
+    assert isinstance(queue, UnavailableEvidence)
+    assert queue.source_kind is EvidenceSourceKind.RABBITMQ_QUEUE
+    assert isinstance(scaler, UnavailableEvidence)
+    assert scaler.source_kind is EvidenceSourceKind.KEDA_SCALER
+
+
+def test_policy_and_action_evidence_require_control_fixture_source() -> None:
+    value = document()
+    value["spec"]["expected"]["evidence"]["supporting"] = [
+        {
+            "evidenceType": "policy-decision",
+            "subjectRole": "request-processor",
+            "freshness": "fresh",
+        },
+        {
+            "evidenceType": "action-result",
+            "subjectRole": "request-processor",
+            "freshness": "fresh",
+        },
+    ]
+    scenario = GuardianScenarioV1Alpha2.model_validate(value)
+    declaration = EnvironmentDeclaration.model_validate(
+        {
+            "environment": "otel-demo",
+            "capabilities": [
+                item.value
+                for item in scenario.spec.environment_requirements.capabilities
+            ],
+            "evidenceSources": [
+                EvidenceSourceKind.ENDPOINT_PROBE.value,
+                EvidenceSourceKind.KUBERNETES_WORKLOAD.value,
+                EvidenceSourceKind.METRICS_API.value,
+            ],
+        }
+    )
+    result = derive_compatibility(scenario, declaration)
+    assert result.status is CompatibilityStatus.UNSUPPORTED
+    assert EvidenceSourceKind.CONTROL_FIXTURE in result.missing_evidence_sources
 
 
 def test_secret_values_are_redacted_from_diagnostics() -> None:

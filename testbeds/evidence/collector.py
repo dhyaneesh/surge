@@ -50,12 +50,21 @@ class HttpProbeRunner(Protocol):
         headers: Mapping[str, str] | None = None,
     ) -> ProbeResult: ...
 
+    async def post_json(
+        self,
+        url: str,
+        payload: Mapping[str, Any],
+        *,
+        timeout: timedelta,
+        headers: Mapping[str, str] | None = None,
+    ) -> ProbeResult: ...
+
 
 Clock = Callable[[], datetime]
 
 
 def control_result_is_not_symptom_evidence(control: Any) -> bool:
-    """Controls (load/fault/deploy) never prove symptoms by themselves."""
+    """Controls and adapter health flags never prove symptoms by themselves."""
     return True
 
 
@@ -148,19 +157,32 @@ class EvidenceCollector:
             "-o",
             "json",
         )
-        try:
-            result = await self._commands.run(argv, timeout=self._timeout)
-            payload = json.loads(result.stdout or "{}")
-        except Exception as error:
+        payload = await self._load_object_payload(
+            argv,
+            EvidenceSourceKind.KUBERNETES_WORKLOAD,
+            provenance,
+            observed_at,
+        )
+        if isinstance(payload, UnavailableEvidence):
+            return payload
+        spec = payload.get("spec")
+        status = payload.get("status")
+        if not isinstance(spec, Mapping) or not isinstance(status, Mapping):
             return UnavailableEvidence(
                 EvidenceSourceKind.KUBERNETES_WORKLOAD,
-                reason="kubernetes workload unavailable",
+                reason="kubernetes workload payload missing spec/status",
                 observed_at=observed_at,
                 provenance_ref=provenance,
-                diagnostics=redact(str(error)),
             )
-        spec = payload.get("spec", {})
-        status = payload.get("status", {})
+        desired = _optional_int(spec.get("replicas"), status.get("replicas"))
+        ready = _required_int(status, "readyReplicas")
+        if desired is None or ready is None:
+            return UnavailableEvidence(
+                EvidenceSourceKind.KUBERNETES_WORKLOAD,
+                reason="kubernetes workload replica fields unavailable",
+                observed_at=observed_at,
+                provenance_ref=provenance,
+            )
         image = _first_image(payload)
         version, digest = _split_image(image)
         return EvidenceSample(
@@ -168,10 +190,8 @@ class EvidenceCollector:
             observed_at=observed_at,
             provenance_ref=provenance,
             values={
-                "desired_replicas": int(
-                    spec.get("replicas") or status.get("replicas") or 0
-                ),
-                "ready_replicas": int(status.get("readyReplicas") or 0),
+                "desired_replicas": desired,
+                "ready_replicas": ready,
                 "service_version": version,
                 "image_digest": digest,
                 "identity": dict(identity),
@@ -202,28 +222,52 @@ class EvidenceCollector:
                 diagnostics=unsafe,
             )
         argv = ("kubectl", "get", "--raw", path)
-        try:
-            result = await self._commands.run(argv, timeout=self._timeout)
-            payload = json.loads(result.stdout or "{}")
-        except Exception as error:
-            return UnavailableEvidence(
-                EvidenceSourceKind.METRICS_API,
-                reason="metrics api unavailable",
-                observed_at=observed_at,
-                provenance_ref=provenance,
-                diagnostics=redact(str(error)),
-            )
-        containers = payload.get("containers") or []
-        if not containers:
+        payload = await self._load_object_payload(
+            argv,
+            EvidenceSourceKind.METRICS_API,
+            provenance,
+            observed_at,
+        )
+        if isinstance(payload, UnavailableEvidence):
+            return payload
+        containers = payload.get("containers")
+        if not isinstance(containers, list) or not containers:
             return UnavailableEvidence(
                 EvidenceSourceKind.METRICS_API,
                 reason="metrics api returned no container usage",
                 observed_at=observed_at,
                 provenance_ref=provenance,
             )
-        usage = containers[0].get("usage", {})
-        cpu = _parse_cpu_millicores(usage.get("cpu", "0"))
-        memory = _parse_memory_bytes(usage.get("memory", "0"))
+        usage = (
+            containers[0].get("usage") if isinstance(containers[0], Mapping) else None
+        )
+        if not isinstance(usage, Mapping):
+            return UnavailableEvidence(
+                EvidenceSourceKind.METRICS_API,
+                reason="metrics api container usage missing",
+                observed_at=observed_at,
+                provenance_ref=provenance,
+            )
+        raw_cpu = usage.get("cpu")
+        raw_memory = usage.get("memory")
+        if raw_cpu is None or raw_memory is None:
+            return UnavailableEvidence(
+                EvidenceSourceKind.METRICS_API,
+                reason="metrics api cpu/memory usage fields unavailable",
+                observed_at=observed_at,
+                provenance_ref=provenance,
+            )
+        try:
+            cpu = _parse_cpu_millicores(str(raw_cpu))
+            memory = _parse_memory_bytes(str(raw_memory))
+        except (TypeError, ValueError) as error:
+            return UnavailableEvidence(
+                EvidenceSourceKind.METRICS_API,
+                reason="metrics api usage values unparsable",
+                observed_at=observed_at,
+                provenance_ref=provenance,
+                diagnostics=redact(str(error)),
+            )
         return EvidenceSample(
             EvidenceSourceKind.METRICS_API,
             observed_at=observed_at,
@@ -265,28 +309,51 @@ class EvidenceCollector:
             "-o",
             "json",
         )
-        try:
-            result = await self._commands.run(argv, timeout=self._timeout)
-            payload = json.loads(result.stdout or "{}")
-        except Exception as error:
+        payload = await self._load_object_payload(
+            argv,
+            EvidenceSourceKind.ROLLOUT_STATE,
+            provenance,
+            observed_at,
+        )
+        if isinstance(payload, UnavailableEvidence):
+            return payload
+        status = payload.get("status")
+        if not isinstance(status, Mapping):
             return UnavailableEvidence(
                 EvidenceSourceKind.ROLLOUT_STATE,
-                reason="rollout state unavailable",
+                reason="rollout status unavailable",
                 observed_at=observed_at,
                 provenance_ref=provenance,
-                diagnostics=redact(str(error)),
             )
-        status = payload.get("status", {})
+        phase = status.get("phase")
+        ready = _required_int(status, "readyReplicas")
+        desired = _required_int(status, "replicas")
+        updated = _required_int(status, "updatedReplicas")
+        unavailable = _required_int(status, "unavailableReplicas")
+        if (
+            not isinstance(phase, str)
+            or not phase
+            or ready is None
+            or desired is None
+            or updated is None
+            or unavailable is None
+        ):
+            return UnavailableEvidence(
+                EvidenceSourceKind.ROLLOUT_STATE,
+                reason="rollout required status fields unavailable",
+                observed_at=observed_at,
+                provenance_ref=provenance,
+            )
         return EvidenceSample(
             EvidenceSourceKind.ROLLOUT_STATE,
             observed_at=observed_at,
             provenance_ref=provenance,
             values={
-                "phase": status.get("phase"),
-                "ready_replicas": int(status.get("readyReplicas") or 0),
-                "desired_replicas": int(status.get("replicas") or 0),
-                "updated_replicas": int(status.get("updatedReplicas") or 0),
-                "unavailable_replicas": int(status.get("unavailableReplicas") or 0),
+                "phase": phase,
+                "ready_replicas": ready,
+                "desired_replicas": desired,
+                "updated_replicas": updated,
+                "unavailable_replicas": unavailable,
                 "stable_hash": status.get("stableRS"),
                 "canary_hash": status.get("currentPodHash"),
                 "identity": dict(identity),
@@ -312,8 +379,16 @@ class EvidenceCollector:
         )
         if isinstance(scaled, UnavailableEvidence):
             return scaled
-        hpa_name = scaled.get("status", {}).get("hpaName")
-        if not hpa_name:
+        status = scaled.get("status")
+        if not isinstance(status, Mapping):
+            return UnavailableEvidence(
+                EvidenceSourceKind.RABBITMQ_QUEUE,
+                reason="scaledobject status unavailable",
+                observed_at=observed_at,
+                provenance_ref=provenance,
+            )
+        hpa_name = status.get("hpaName")
+        if not isinstance(hpa_name, str) or not hpa_name:
             return UnavailableEvidence(
                 EvidenceSourceKind.RABBITMQ_QUEUE,
                 reason="scaledobject missing hpaName",
@@ -330,7 +405,15 @@ class EvidenceCollector:
         )
         if isinstance(hpa, UnavailableEvidence):
             return hpa
-        depth = _queue_depth(hpa.get("status", {}).get("currentMetrics", []))
+        hpa_status = hpa.get("status")
+        if not isinstance(hpa_status, Mapping):
+            return UnavailableEvidence(
+                EvidenceSourceKind.RABBITMQ_QUEUE,
+                reason="hpa status unavailable",
+                observed_at=observed_at,
+                provenance_ref=provenance,
+            )
+        depth = _queue_depth(hpa_status.get("currentMetrics", []))
         if depth is None:
             return UnavailableEvidence(
                 EvidenceSourceKind.RABBITMQ_QUEUE,
@@ -364,17 +447,40 @@ class EvidenceCollector:
         )
         if isinstance(scaled, UnavailableEvidence):
             return scaled
-        status = scaled.get("status", {})
-        conditions = status.get("conditions", [])
-        health = status.get("health", {})
+        status = scaled.get("status")
+        if not isinstance(status, Mapping):
+            return UnavailableEvidence(
+                EvidenceSourceKind.KEDA_SCALER,
+                reason="scaledobject status unavailable",
+                observed_at=observed_at,
+                provenance_ref=provenance,
+            )
+        conditions = status.get("conditions")
+        health = status.get("health")
+        if not isinstance(conditions, list) or not conditions:
+            return UnavailableEvidence(
+                EvidenceSourceKind.KEDA_SCALER,
+                reason="scaler conditions unavailable",
+                observed_at=observed_at,
+                provenance_ref=provenance,
+            )
+        if not isinstance(health, Mapping):
+            return UnavailableEvidence(
+                EvidenceSourceKind.KEDA_SCALER,
+                reason="scaler health unavailable",
+                observed_at=observed_at,
+                provenance_ref=provenance,
+            )
         ready = any(
-            item.get("type") == "Ready" and item.get("status") == "True"
+            isinstance(item, Mapping)
+            and item.get("type") == "Ready"
+            and item.get("status") == "True"
             for item in conditions
         )
         scaler_error = any(
-            value.get("status") != "Happy" or value.get("numberOfFailures", 0) > 0
+            isinstance(value, Mapping)
+            and (value.get("status") != "Happy" or value.get("numberOfFailures", 0) > 0)
             for value in health.values()
-            if isinstance(value, Mapping)
         )
         return EvidenceSample(
             EvidenceSourceKind.KEDA_SCALER,
@@ -384,12 +490,58 @@ class EvidenceCollector:
                 "ready": ready,
                 "scaler_error": scaler_error,
                 "active": any(
-                    item.get("type") == "Active" and item.get("status") == "True"
+                    isinstance(item, Mapping)
+                    and item.get("type") == "Active"
+                    and item.get("status") == "True"
                     for item in conditions
                 ),
                 "identity": dict(identity),
             },
         )
+
+    async def _load_object_payload(
+        self,
+        argv: tuple[str, ...],
+        source: EvidenceSourceKind,
+        provenance: str,
+        observed_at: datetime,
+    ) -> dict[str, Any] | UnavailableEvidence:
+        try:
+            result = await self._commands.run(argv, timeout=self._timeout)
+        except Exception as error:
+            return UnavailableEvidence(
+                source,
+                reason=f"{source.value} unavailable",
+                observed_at=observed_at,
+                provenance_ref=provenance,
+                diagnostics=redact(str(error)),
+            )
+        raw = (result.stdout or "").strip()
+        if not raw:
+            return UnavailableEvidence(
+                source,
+                reason=f"{source.value} returned empty payload",
+                observed_at=observed_at,
+                provenance_ref=provenance,
+            )
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as error:
+            return UnavailableEvidence(
+                source,
+                reason=f"{source.value} returned invalid json",
+                observed_at=observed_at,
+                provenance_ref=provenance,
+                diagnostics=redact(str(error)),
+            )
+        if not isinstance(payload, dict) or not payload:
+            return UnavailableEvidence(
+                source,
+                reason=f"{source.value} returned empty object",
+                observed_at=observed_at,
+                provenance_ref=provenance,
+            )
+        return payload
 
     async def _get_json(
         self,
@@ -412,22 +564,35 @@ class EvidenceCollector:
                 diagnostics=unsafe,
             )
         argv = ("kubectl", "get", kind, name, "-n", namespace, "-o", "json")
-        try:
-            result = await self._commands.run(argv, timeout=self._timeout)
-            return json.loads(result.stdout or "{}")
-        except Exception as error:
-            return UnavailableEvidence(
-                source,
-                reason=f"{source.value} unavailable",
-                observed_at=observed_at,
-                provenance_ref=provenance,
-                diagnostics=redact(str(error)),
-            )
+        return await self._load_object_payload(argv, source, provenance, observed_at)
 
 
 def _validate_k8s_token(value: str, field: str) -> str | None:
     if not value or _UNSAFE_NAME.search(value) or "/" in value:
         return f"unsafe {field} rejected"
+    return None
+
+
+def _required_int(mapping: Mapping[str, Any], key: str) -> int | None:
+    if key not in mapping:
+        return None
+    value = mapping[key]
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_int(*candidates: Any) -> int | None:
+    for value in candidates:
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
     return None
 
 
@@ -438,7 +603,11 @@ def _first_image(payload: Mapping[str, Any]) -> str | None:
         .get("spec", {})
         .get("containers", [])
     )
+    if not isinstance(containers, list):
+        return None
     for item in containers:
+        if not isinstance(item, Mapping):
+            continue
         image = item.get("image")
         if image:
             return str(image)
@@ -488,7 +657,7 @@ def _parse_memory_bytes(value: str) -> float:
 
 def _percentile(values: Sequence[float], percentile: float) -> float:
     if not values:
-        return 0.0
+        raise ValueError("percentile requires observed samples")
     ordered = sorted(values)
     if len(ordered) == 1:
         return ordered[0]
@@ -501,10 +670,18 @@ def _percentile(values: Sequence[float], percentile: float) -> float:
     return ordered[low] * (1 - weight) + ordered[high] * weight
 
 
-def _queue_depth(metrics: Sequence[Mapping[str, Any]]) -> int | None:
+def _queue_depth(metrics: Any) -> int | None:
+    if not isinstance(metrics, list):
+        return None
     for metric in metrics:
+        if not isinstance(metric, Mapping):
+            continue
         external = metric.get("external") or {}
+        if not isinstance(external, Mapping):
+            continue
         current = external.get("current") or {}
+        if not isinstance(current, Mapping):
+            continue
         for key in ("averageValue", "value"):
             raw = current.get(key)
             if raw is None:

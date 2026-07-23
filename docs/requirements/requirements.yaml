@@ -121,7 +121,6 @@ design_capabilities:
   - tests/unit/test_scenario_compatibility.py
   - tests/unit/test_scenario_catalog.py
   - tests/contract/test_environment_capability_declarations.py
-  - tests/contract/test_scenario_execution_contract.py
   status: implemented
 requirements:
 - id: GRD-REA-001
