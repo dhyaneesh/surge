@@ -55,9 +55,6 @@ _OBSERVATION_PATH = re.compile(
     rf"^/v1/incidents/(?P<incident_id>{SCOPED_IDENTIFIER_PATTERN[1:-1]})/"
     r"observations$"
 )
-_SECRET_KEY = re.compile(
-    r"(?:authorization|cookie|credential|password|secret|token)", re.IGNORECASE
-)
 _BEARER_VALUE = re.compile(r"(?i)\bbearer\s+[^\s,;]+")
 _ASSIGNED_SECRET = re.compile(
     r"(?i)\b(authorization|cookie|credential|password|secret|token)"
@@ -65,6 +62,8 @@ _ASSIGNED_SECRET = re.compile(
 )
 _SUPPORTED_HTTP_METHODS = frozenset({"GET", "POST"})
 _SATURATED_BODY = b'{"error":"service unavailable"}'
+_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{32,256}$")
+_MINIMUM_TOKEN_DIVERSITY = 8
 
 
 class _DuplicateJSONKey(ValueError):
@@ -113,11 +112,7 @@ def _redact_string(value: str, exact_secrets: frozenset[str]) -> str:
 def _redact(value: Any, *, exact_secrets: frozenset[str] = frozenset()) -> Any:
     if isinstance(value, Mapping):
         return {
-            _redact_string(str(key), exact_secrets): (
-                "[REDACTED]"
-                if _SECRET_KEY.search(str(key))
-                else _redact(item, exact_secrets=exact_secrets)
-            )
+            key: _redact(item, exact_secrets=exact_secrets)
             for key, item in value.items()
         }
     if isinstance(value, list | tuple):
@@ -127,18 +122,24 @@ def _redact(value: Any, *, exact_secrets: frozenset[str] = frozenset()) -> Any:
     return value
 
 
-def _contains_exact_secret(value: Any, exact_secrets: frozenset[str]) -> bool:
+def _contains_configured_token_substring(
+    value: Any, exact_secrets: frozenset[str]
+) -> bool:
     if isinstance(value, BaseModel):
-        return _contains_exact_secret(value.model_dump(mode="python"), exact_secrets)
+        return _contains_configured_token_substring(
+            value.model_dump(mode="python"), exact_secrets
+        )
     if isinstance(value, Mapping):
         return any(
-            _contains_exact_secret(key, exact_secrets)
-            or _contains_exact_secret(item, exact_secrets)
+            _contains_configured_token_substring(key, exact_secrets)
+            or _contains_configured_token_substring(item, exact_secrets)
             for key, item in value.items()
         )
     if isinstance(value, list | tuple | set | frozenset):
-        return any(_contains_exact_secret(item, exact_secrets) for item in value)
-    return isinstance(value, str) and value in exact_secrets
+        return any(
+            _contains_configured_token_substring(item, exact_secrets) for item in value
+        )
+    return isinstance(value, str) and any(secret in value for secret in exact_secrets)
 
 
 def _normalized_http_method(
@@ -156,16 +157,8 @@ def _validated_token_tenants(token_tenants: Mapping[str, str]) -> Mapping[str, s
     for token, tenant in token_tenants.items():
         if (
             not isinstance(token, str)
-            or not token
-            or not token.isascii()
-            or token != token.strip()
-            or any(
-                character.isspace()
-                or ord(character) < 33
-                or ord(character) == 127
-                or character == ","
-                for character in token
-            )
+            or _TOKEN_PATTERN.fullmatch(token) is None
+            or len(set(token)) < _MINIMUM_TOKEN_DIVERSITY
             or not isinstance(tenant, str)
             or re.fullmatch(SCOPED_IDENTIFIER_PATTERN, tenant) is None
         ):
@@ -325,7 +318,7 @@ class GuardianHTTPServer(ThreadingHTTPServer):
         return None
 
     def contains_configured_token(self, value: Any) -> bool:
-        return _contains_exact_secret(value, self.token_values)
+        return _contains_configured_token_substring(value, self.token_values)
 
     def handle_error(self, request: Any, client_address: Any) -> None:
         """Suppress SocketServer tracebacks that could contain request secrets."""
@@ -506,7 +499,7 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
             or values[0] != values[0].strip()
             or len(values[0]) > 256
             or any(ord(character) < 33 for character in values[0])
-            or values[0] in self.guardian_server.token_values
+            or any(token in values[0] for token in self.guardian_server.token_values)
         ):
             self._error(HTTPStatus.BAD_REQUEST, "idempotency key required")
             return None

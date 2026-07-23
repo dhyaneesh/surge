@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import signal
 import sys
@@ -22,6 +23,9 @@ from apps.guardian_api.http import (
 
 class GuardianServerRuntimeError(RuntimeError):
     """The serving thread exited unexpectedly or could not stop safely."""
+
+
+DEFAULT_SERVING_STARTUP_TIMEOUT = 1.0
 
 
 @dataclass(frozen=True)
@@ -109,6 +113,7 @@ def run_runtime(
     signal_installer: Callable[..., object] = signal.signal,
     thread_factory: Callable[..., Thread] = Thread,
     readiness_writer: Callable[[str], None] = _write_readiness,
+    serving_startup_timeout: float = DEFAULT_SERVING_STARTUP_TIMEOUT,
 ) -> int:
     """Start and stop one runtime while cleaning every partial startup state."""
 
@@ -121,6 +126,13 @@ def run_runtime(
     previous_sigterm_handler: object | None = None
     sigterm_handler_installed = False
     try:
+        if (
+            not isinstance(serving_startup_timeout, int | float)
+            or isinstance(serving_startup_timeout, bool)
+            or not math.isfinite(serving_startup_timeout)
+            or serving_startup_timeout < 1.0
+        ):
+            raise ValueError("serving startup timeout must be at least one second")
         server = server_factory(
             token_tenants=config.token_tenants,
             host=config.host,
@@ -166,7 +178,7 @@ def run_runtime(
         )
         thread.start()
         thread_started = True
-        if not serving_entered.wait(timeout=0.1):
+        if not serving_entered.wait(timeout=serving_startup_timeout):
             raise GuardianServerRuntimeError(
                 "Guardian HTTP serving did not start within bound"
             )

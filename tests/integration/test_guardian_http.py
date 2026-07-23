@@ -38,6 +38,8 @@ from apps.guardian_api.service import GuardianService
 
 
 DIGEST = "sha256:" + "a" * 64
+TOKEN_A = "guardian_local_token_A_0123456789"
+TOKEN_B = "guardian_local_token_B_9876543210"
 
 
 def telemetry(observed_at: datetime) -> TelemetryFacts:
@@ -106,7 +108,7 @@ def observation_payload(
 @contextmanager
 def running_server(**kwargs: Any) -> Iterator[GuardianHTTPServer]:
     token_tenants = kwargs.pop(
-        "token_tenants", {"opaque-a": "tenant-a", "opaque-b": "tenant-b"}
+        "token_tenants", {TOKEN_A: "tenant-a", TOKEN_B: "tenant-b"}
     )
     server = create_server(
         token_tenants=token_tenants,
@@ -169,7 +171,7 @@ def test_health_create_duplicate_observe_and_snapshot_lifecycle() -> None:
             server,
             "POST",
             "/v1/incidents",
-            token="opaque-a",
+            token=TOKEN_A,
             idempotency_key="create-1",
             payload=payload,
         )
@@ -177,7 +179,7 @@ def test_health_create_duplicate_observe_and_snapshot_lifecycle() -> None:
             server,
             "POST",
             "/v1/incidents",
-            token="opaque-a",
+            token=TOKEN_A,
             idempotency_key="create-1",
             payload=payload,
             content_type="application/json; charset=utf-8",
@@ -195,7 +197,7 @@ def test_health_create_duplicate_observe_and_snapshot_lifecycle() -> None:
             server,
             "POST",
             f"/v1/incidents/{incident_id}/observations",
-            token="opaque-a",
+            token=TOKEN_A,
             payload=observation_payload(incident_id=incident_id),
         )
         assert observed.status == 200
@@ -205,7 +207,7 @@ def test_health_create_duplicate_observe_and_snapshot_lifecycle() -> None:
             server,
             "GET",
             f"/v1/incidents/{incident_id}/scenario-snapshot",
-            token="opaque-a",
+            token=TOKEN_A,
         )
         assert snapshot.status == 200
         assert snapshot_body == observed_body
@@ -267,8 +269,8 @@ def test_partial_body_timeout_is_a_safe_request_timeout(
             connection.sendall(
                 b"POST /v1/incidents HTTP/1.1\r\n"
                 b"Host: localhost\r\n"
-                b"Authorization: Bearer opaque-a\r\n"
-                b"Idempotency-Key: partial\r\n"
+                + f"Authorization: Bearer {TOKEN_A}\r\n".encode("ascii")
+                + b"Idempotency-Key: partial\r\n"
                 b"Content-Type: application/json\r\n"
                 b"Content-Length: 10\r\n\r\n{"
             )
@@ -291,7 +293,7 @@ def test_malformed_requests_and_unknown_paths_are_bounded() -> None:
             server,
             "POST",
             "/v1/incidents",
-            token="opaque-a",
+            token=TOKEN_A,
             idempotency_key="create-1",
             payload=b"{not-json",
             content_type="application/json",
@@ -303,10 +305,10 @@ def test_malformed_requests_and_unknown_paths_are_bounded() -> None:
             server,
             "POST",
             "/v1/incidents",
-            token="opaque-a",
+            token=TOKEN_A,
             payload=incident_payload(),
         )
-        missing_path, _ = request(server, "GET", "/v1/missing", token="opaque-a")
+        missing_path, _ = request(server, "GET", "/v1/missing", token=TOKEN_A)
         wrong_method, wrong_method_body = request(server, "POST", "/health")
         assert missing_key.status == 400
         assert missing_path.status == 404
@@ -334,7 +336,7 @@ def test_universal_envelope_caps_gets_and_unknown_methods_use_json_405() -> None
 
 
 def test_server_shutdown_releases_the_loopback_listener() -> None:
-    server = create_server(token_tenants={"opaque-a": "tenant-a"}, port=0)
+    server = create_server(token_tenants={TOKEN_A: "tenant-a"}, port=0)
     host, port = server.listening_address
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -369,7 +371,7 @@ def test_shutdown_waits_for_active_request_handlers() -> None:
             return super().get_incident(authenticated_tenant, incident_id)
 
     server = create_server(
-        token_tenants={"opaque-a": "tenant-a"},
+        token_tenants={TOKEN_A: "tenant-a"},
         service=BlockingService(),
         port=0,
     )
@@ -379,7 +381,7 @@ def test_shutdown_waits_for_active_request_handlers() -> None:
             server,
             "GET",
             "/v1/incidents/missing/scenario-snapshot",
-            token="opaque-a",
+            token=TOKEN_A,
         )
     )
     serve_thread.start()
@@ -426,7 +428,7 @@ def test_request_concurrency_limit_rejects_saturation_then_recovers() -> None:
                     server,
                     "GET",
                     "/v1/incidents/missing/scenario-snapshot",
-                    token="opaque-a",
+                    token=TOKEN_A,
                 )[0].status
             )
         )
@@ -449,7 +451,7 @@ def test_request_concurrency_limit_rejects_saturation_then_recovers() -> None:
 
 def test_cli_prints_only_readiness_and_shuts_down_cleanly_on_sigterm() -> None:
     repository_root = Path(__file__).resolve().parents[2]
-    token = "never-print-this-token"
+    token = "never_print_this_token_A_0123456789"
     environment = {
         **os.environ,
         "GUARDIAN_LOCAL_TOKENS_JSON": json.dumps({token: "tenant-a"}),
@@ -494,7 +496,7 @@ def test_cli_sigterm_closes_idle_pre_request_socket_within_bound() -> None:
     repository_root = Path(__file__).resolve().parents[2]
     environment = {
         **os.environ,
-        "GUARDIAN_LOCAL_TOKENS_JSON": '{"opaque-a":"tenant-a"}',
+        "GUARDIAN_LOCAL_TOKENS_JSON": json.dumps({TOKEN_A: "tenant-a"}),
     }
     process = subprocess.Popen(
         [sys.executable, "-m", "apps.guardian_api", "--port", "0"],
