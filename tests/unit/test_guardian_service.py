@@ -94,10 +94,16 @@ def observation(
     tenant_id: str = "tenant-a",
     incident_id: str = "incident-1",
     healthy: bool = True,
+    observation_id: str = "observation-1",
+    sequence: int = 1,
+    window_key: str = "window-1",
 ) -> ObservationUpdate:
     return ObservationUpdate(
         tenant_id=tenant_id,
         incident_id=incident_id,
+        observation_id=observation_id,
+        sequence=sequence,
+        window_key=window_key,
         observed_at=observed_at,
         window_started_at=observed_at - timedelta(seconds=30),
         telemetry=telemetry(observed_at),
@@ -299,10 +305,10 @@ def test_store_exposes_only_narrow_append_not_arbitrary_update() -> None:
 
 
 def test_projector_failure_rolls_back_append() -> None:
-    def failing_projector(facts, observations, evaluation_times):
+    def failing_projector(facts, observations, evaluation_times, conflicts):
         if observations:
             raise RuntimeError("projection failed")
-        return replay_incident_history(facts, observations, evaluation_times)
+        return replay_incident_history(facts, observations, evaluation_times, conflicts)
 
     store = InMemoryIncidentStore(projector=failing_projector)
     service = GuardianService(store)
@@ -322,7 +328,7 @@ def test_projector_failure_rolls_back_append() -> None:
 def test_projector_reentry_is_rejected_and_rolls_back_outer_append() -> None:
     store_reference: dict[str, InMemoryIncidentStore] = {}
 
-    def reentrant_projector(facts, observations, evaluation_times):
+    def reentrant_projector(facts, observations, evaluation_times, conflicts):
         if observations:
             try:
                 store_reference["store"].append_observation(
@@ -333,7 +339,7 @@ def test_projector_reentry_is_rejected_and_rolls_back_outer_append() -> None:
                 )
             except ReentrantStoreWriteError:
                 pass
-        return replay_incident_history(facts, observations, evaluation_times)
+        return replay_incident_history(facts, observations, evaluation_times, conflicts)
 
     store = InMemoryIncidentStore(projector=reentrant_projector)
     store_reference["store"] = store
@@ -371,6 +377,37 @@ def test_chronologically_older_observation_is_rejected_without_persistence() -> 
         )
 
     assert store.get("tenant-a", "incident-1") == before
+
+
+def test_first_observation_cannot_predate_incident_facts() -> None:
+    store = InMemoryIncidentStore()
+    service = GuardianService(store)
+    before = service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
+
+    with pytest.raises(ObservationOrderError):
+        service.append_observation(
+            "tenant-a",
+            "incident-1",
+            observation(observed_at=NOW - timedelta(microseconds=1)),
+            now=NOW,
+        )
+
+    assert store.get("tenant-a", "incident-1") == before
+
+
+def test_first_observation_may_equal_incident_observed_at() -> None:
+    service = GuardianService(InMemoryIncidentStore())
+    service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
+
+    snapshot = service.append_observation(
+        "tenant-a",
+        "incident-1",
+        observation(observed_at=NOW),
+        now=NOW,
+    )
+
+    assert snapshot.observations[0].observed_at == NOW
+    assert not snapshot.observation_conflicts
 
 
 def test_pure_replay_rejects_reordered_history() -> None:
@@ -418,9 +455,11 @@ def test_simultaneous_appends_have_no_lost_updates() -> None:
 
     def append(index: int):
         barrier.wait()
-        update = observation(observed_at=NOW + timedelta(minutes=1)).model_copy(
-            update={"provenance_ref": f"query-contract/concurrent-{index}"}
-        )
+        update = observation(
+            observed_at=NOW + timedelta(minutes=1),
+            observation_id=f"observation-{index}",
+            sequence=index,
+        ).model_copy(update={"provenance_ref": f"query-contract/concurrent-{index}"})
         return service.append_observation(
             "tenant-a",
             "incident-1",
@@ -439,13 +478,87 @@ def test_simultaneous_appends_have_no_lost_updates() -> None:
     }
 
 
+def test_conflicting_window_is_fail_closed_and_arrival_order_independent() -> None:
+    incident_facts = facts(
+        control=ControlFacts(action_completed_at=NOW - timedelta(minutes=1))
+    )
+    healthy = observation(observed_at=NOW + timedelta(minutes=1), healthy=True)
+    unhealthy = observation(observed_at=NOW + timedelta(minutes=1), healthy=False)
+
+    def run(first: ObservationUpdate, second: ObservationUpdate):
+        service = GuardianService(InMemoryIncidentStore())
+        service.submit_incident("tenant-a", "request-1", incident_facts, now=NOW)
+        service.append_observation(
+            "tenant-a", "incident-1", first, now=NOW + timedelta(minutes=1)
+        )
+        return service.append_observation(
+            "tenant-a", "incident-1", second, now=NOW + timedelta(minutes=2)
+        )
+
+    healthy_first = run(healthy, unhealthy)
+    unhealthy_first = run(unhealthy, healthy)
+
+    assert canonical_incident_snapshot(healthy_first) == canonical_incident_snapshot(
+        unhealthy_first
+    )
+    assert len(healthy_first.observation_conflicts) == 1
+    assert healthy_first.projection.terminal_reason == "observation-conflict"
+    assert not healthy_first.projection.telemetry_healthy
+    assert not healthy_first.projection.recovery_verified
+    assert healthy_first.projection.proposed_action is None
+    assert not healthy_first.projection.eligible_actions
+
+
+def test_concurrent_conflicting_window_matches_canonical_fail_closed_state() -> None:
+    incident_facts = facts(
+        control=ControlFacts(action_completed_at=NOW - timedelta(minutes=1))
+    )
+    healthy = observation(observed_at=NOW + timedelta(minutes=1), healthy=True)
+    unhealthy = observation(observed_at=NOW + timedelta(minutes=1), healthy=False)
+
+    expected_service = GuardianService(InMemoryIncidentStore())
+    expected_service.submit_incident("tenant-a", "request-1", incident_facts, now=NOW)
+    expected_service.append_observation(
+        "tenant-a", "incident-1", healthy, now=NOW + timedelta(minutes=1)
+    )
+    expected = expected_service.append_observation(
+        "tenant-a", "incident-1", unhealthy, now=NOW + timedelta(minutes=2)
+    )
+
+    store = InMemoryIncidentStore()
+    service = GuardianService(store)
+    service.submit_incident("tenant-a", "request-1", incident_facts, now=NOW)
+    barrier = Barrier(2)
+
+    def append(update: ObservationUpdate):
+        barrier.wait()
+        return service.append_observation(
+            "tenant-a",
+            "incident-1",
+            update,
+            now=NOW + timedelta(minutes=2),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        tuple(executor.map(append, (healthy, unhealthy)))
+
+    actual = service.get_incident("tenant-a", "incident-1")
+    assert canonical_incident_snapshot(actual) == canonical_incident_snapshot(expected)
+    assert actual.projection.terminal_reason == "observation-conflict"
+
+
 def test_observations_are_append_only_and_reevaluate_history_deterministically() -> (
     None
 ):
     first_observation = observation(
         observed_at=NOW + timedelta(minutes=1), healthy=False
     )
-    second_observation = observation(observed_at=NOW + timedelta(minutes=2))
+    second_observation = observation(
+        observed_at=NOW + timedelta(minutes=2),
+        observation_id="observation-2",
+        sequence=2,
+        window_key="window-2",
+    )
 
     incident_facts = facts(
         control=ControlFacts(action_completed_at=NOW - timedelta(minutes=1))

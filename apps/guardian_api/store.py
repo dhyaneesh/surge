@@ -14,17 +14,22 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from threading import RLock
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, model_validator
 
 from apps.guardian_api.domain import evaluate_incident
 from apps.guardian_api.models import (
+    ActionType,
+    CriticalIntegrityFailure,
     GuardianProjection,
+    IncidentClass,
     IncidentFacts,
     ObservationUpdate,
+    PolicyDecision,
     ScopedIdentifier,
     StrictModel,
+    WorkflowState,
 )
 
 
@@ -55,6 +60,16 @@ class IncidentNotFoundError(LookupError):
         super().__init__("incident not found")
 
 
+class ObservationConflict(StrictModel):
+    """Immutable marker for divergent payloads sharing one logical window."""
+
+    state: Literal["conflicting"] = "conflicting"
+    observation_id: ScopedIdentifier
+    sequence: int
+    window_key: ScopedIdentifier
+    payload_hashes: tuple[str, ...]
+
+
 class IncidentSnapshot(StrictModel):
     """Immutable application state returned without exposing store-owned objects."""
 
@@ -63,6 +78,7 @@ class IncidentSnapshot(StrictModel):
     workflow_id: str
     facts: IncidentFacts
     observations: tuple[ObservationUpdate, ...] = ()
+    observation_conflicts: tuple[ObservationConflict, ...] = ()
     evaluation_times: tuple[AwareDatetime, ...]
     projection_history: tuple[GuardianProjection, ...]
     projection: GuardianProjection
@@ -97,7 +113,12 @@ class _IdempotencyRecord:
 
 
 ProjectionReplayer = Callable[
-    [IncidentFacts, tuple[ObservationUpdate, ...], tuple[datetime, ...]],
+    [
+        IncidentFacts,
+        tuple[ObservationUpdate, ...],
+        tuple[datetime, ...],
+        tuple[ObservationConflict, ...],
+    ],
     tuple[GuardianProjection, ...],
 ]
 
@@ -160,10 +181,96 @@ def canonical_incident_snapshot(snapshot: IncidentSnapshot) -> str:
     return canonical_json(snapshot)
 
 
+def _observation_identity(observation: ObservationUpdate) -> tuple[str, str, int]:
+    return (
+        observation.observation_id,
+        observation.window_key,
+        observation.sequence,
+    )
+
+
+def _observation_sort_key(observation: ObservationUpdate) -> tuple[Any, ...]:
+    return (
+        observation.observed_at,
+        observation.sequence,
+        observation.window_key,
+        observation.observation_id,
+        canonical_json(observation),
+    )
+
+
+def _observation_conflicts(
+    observations: tuple[ObservationUpdate, ...],
+) -> tuple[ObservationConflict, ...]:
+    payloads_by_identity: dict[tuple[str, str, int], set[str]] = {}
+    for observation in observations:
+        payloads_by_identity.setdefault(_observation_identity(observation), set()).add(
+            canonical_json(observation)
+        )
+    conflicts = []
+    for (observation_id, window_key, sequence), payloads in sorted(
+        payloads_by_identity.items()
+    ):
+        if len(payloads) < 2:
+            continue
+        conflicts.append(
+            ObservationConflict(
+                observation_id=observation_id,
+                sequence=sequence,
+                window_key=window_key,
+                payload_hashes=tuple(
+                    hashlib.sha256(payload.encode("utf-8")).hexdigest()
+                    for payload in sorted(payloads)
+                ),
+            )
+        )
+    return tuple(conflicts)
+
+
+def _fail_closed_conflict_projection(
+    projection: GuardianProjection,
+) -> GuardianProjection:
+    failures = tuple(
+        dict.fromkeys(
+            (
+                *projection.integrity_failures,
+                CriticalIntegrityFailure.COMPARISON_INVALID,
+            )
+        )
+    )
+    forbidden = tuple(
+        dict.fromkeys(
+            (
+                *projection.forbidden_actions,
+                ActionType.SCALE_UP,
+                ActionType.SCALE_DOWN,
+                ActionType.ROLLBACK,
+                ActionType.PROTECT_DEPENDENCY,
+            )
+        )
+    )
+    return projection.model_copy(
+        update={
+            "incident_class": IncidentClass.TELEMETRY_FAILURE,
+            "telemetry_healthy": False,
+            "integrity_failures": failures,
+            "eligible_actions": (),
+            "permitted_actions": (ActionType.INVESTIGATE, ActionType.ALERT),
+            "forbidden_actions": forbidden,
+            "proposed_action": None,
+            "workflow_state": WorkflowState.TELEMETRY_FAILURE,
+            "policy_decision": PolicyDecision.DENIED,
+            "terminal_reason": "observation-conflict",
+            "recovery_verified": False,
+        }
+    )
+
+
 def replay_incident_history(
     facts: IncidentFacts,
     observations: tuple[ObservationUpdate, ...],
     evaluation_times: tuple[datetime, ...],
+    conflicts: tuple[ObservationConflict, ...] = (),
 ) -> tuple[GuardianProjection, ...]:
     """Purely recompute the initial and observation-aligned projection history."""
 
@@ -174,6 +281,8 @@ def replay_incident_history(
         for previous, current in zip(observations, observations[1:])
     ):
         raise ObservationOrderError("replay history must be chronological")
+    if observations and observations[0].observed_at < facts.observed_at:
+        raise ObservationOrderError("observation cannot predate incident facts")
     projections = [evaluate_incident(facts, now=evaluation_times[0])]
     projections.extend(
         evaluate_incident(facts, now=evaluated_at, observation=observation)
@@ -181,6 +290,8 @@ def replay_incident_history(
             observations, evaluation_times[1:], strict=True
         )
     )
+    if conflicts:
+        projections[-1] = _fail_closed_conflict_projection(projections[-1])
     return tuple(projections)
 
 
@@ -222,8 +333,9 @@ class InMemoryIncidentStore:
         facts: IncidentFacts,
         observations: tuple[ObservationUpdate, ...],
         evaluation_times: tuple[datetime, ...],
+        conflicts: tuple[ObservationConflict, ...],
     ) -> tuple[GuardianProjection, ...]:
-        history = self._projector(facts, observations, evaluation_times)
+        history = self._projector(facts, observations, evaluation_times, conflicts)
         if self._reentry_attempted:
             raise ReentrantStoreWriteError("projector attempted a nested write")
         if (
@@ -267,7 +379,7 @@ class InMemoryIncidentStore:
                 stored = existing
             else:
                 evaluation_times = (now,)
-                projection_history = self._project(facts, (), evaluation_times)
+                projection_history = self._project(facts, (), evaluation_times, ())
                 stored = IncidentSnapshot(
                     tenant_id=authenticated_tenant,
                     incident_id=facts.incident_id,
@@ -312,6 +424,8 @@ class InMemoryIncidentStore:
                 )
             if observation in current.observations:
                 return _copy_snapshot(current)
+            if observation.observed_at < current.facts.observed_at:
+                raise ObservationOrderError("observation cannot predate incident facts")
             if (
                 current.observations
                 and observation.observed_at < current.observations[-1].observed_at
@@ -319,10 +433,42 @@ class InMemoryIncidentStore:
                 raise ObservationOrderError(
                     "observations must be appended in chronological order"
                 )
-            observations = (*current.observations, observation)
-            evaluation_times = (*current.evaluation_times, now)
+            ordered_entries = sorted(
+                (
+                    *zip(
+                        current.observations,
+                        current.evaluation_times[1:],
+                        strict=True,
+                    ),
+                    (observation, now),
+                ),
+                key=lambda entry: _observation_sort_key(entry[0]),
+            )
+            observations = tuple(item for item, _ in ordered_entries)
+            conflicts = _observation_conflicts(observations)
+            conflicting_identities = {
+                (item.observation_id, item.window_key, item.sequence)
+                for item in conflicts
+            }
+            latest_conflict_evaluation = {
+                identity: max(
+                    evaluated_at
+                    for item, evaluated_at in ordered_entries
+                    if _observation_identity(item) == identity
+                )
+                for identity in conflicting_identities
+            }
+            evaluation_times = (
+                current.evaluation_times[0],
+                *(
+                    latest_conflict_evaluation.get(
+                        _observation_identity(item), evaluated_at
+                    )
+                    for item, evaluated_at in ordered_entries
+                ),
+            )
             projection_history = self._project(
-                current.facts, observations, evaluation_times
+                current.facts, observations, evaluation_times, conflicts
             )
             replacement = IncidentSnapshot(
                 tenant_id=current.tenant_id,
@@ -330,6 +476,7 @@ class InMemoryIncidentStore:
                 workflow_id=current.workflow_id,
                 facts=current.facts,
                 observations=observations,
+                observation_conflicts=conflicts,
                 evaluation_times=evaluation_times,
                 projection_history=projection_history,
                 projection=projection_history[-1],

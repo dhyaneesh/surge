@@ -362,6 +362,9 @@ class ObservationUpdate(StrictModel):
     )
     tenant_id: ScopedIdentifier
     incident_id: ScopedIdentifier
+    observation_id: ScopedIdentifier
+    sequence: int = Field(ge=0)
+    window_key: ScopedIdentifier
     observed_at: AwareDatetime
     window_started_at: AwareDatetime
     telemetry: TelemetryFacts

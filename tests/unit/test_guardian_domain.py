@@ -1036,6 +1036,9 @@ def test_fresh_later_observation_can_verify_recovery() -> None:
     update = ObservationUpdate(
         tenant_id="tenant-a",
         incident_id="incident-1",
+        observation_id="recovery-2",
+        sequence=2,
+        window_key="recovery-window",
         observed_at=NOW,
         window_started_at=NOW - timedelta(seconds=30),
         telemetry=base_facts().telemetry,
@@ -1080,6 +1083,9 @@ def test_foreign_assessment_evidence_cannot_verify_recovery() -> None:
     update = ObservationUpdate(
         tenant_id="tenant-a",
         incident_id="incident-1",
+        observation_id="recovery-2",
+        sequence=2,
+        window_key="recovery-window",
         observed_at=NOW,
         window_started_at=NOW - timedelta(seconds=30),
         telemetry=base_facts().telemetry,
@@ -1184,6 +1190,9 @@ def test_observation_window_and_samples_cannot_be_future_relative_to_envelope() 
         ObservationUpdate(
             tenant_id="tenant-a",
             incident_id="incident-1",
+            observation_id="invalid-window",
+            sequence=1,
+            window_key="recovery-window",
             observed_at=NOW,
             window_started_at=NOW + timedelta(seconds=1),
             telemetry=telemetry,
@@ -1195,6 +1204,9 @@ def test_observation_window_and_samples_cannot_be_future_relative_to_envelope() 
         ObservationUpdate(
             tenant_id="tenant-a",
             incident_id="incident-1",
+            observation_id="invalid-sample",
+            sequence=1,
+            window_key="recovery-window",
             observed_at=NOW,
             window_started_at=NOW - timedelta(seconds=1),
             telemetry=telemetry.model_copy(
