@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from threading import Barrier
 
 import pytest
@@ -31,6 +31,7 @@ from apps.guardian_api.service import (
 )
 from apps.guardian_api.store import (
     InMemoryIncidentStore,
+    IncidentInvariantError,
     canonical_incident_facts,
     incident_facts_hash,
 )
@@ -157,6 +158,26 @@ def test_same_tenant_and_key_with_different_facts_conflicts() -> None:
         )
 
 
+def test_same_instant_with_different_offsets_is_the_same_idempotent_request() -> None:
+    store = InMemoryIncidentStore()
+    service = GuardianService(store)
+    original = facts()
+    shifted_at = NOW.astimezone(timezone(timedelta(hours=2)))
+    shifted_payload = original.model_dump()
+    shifted_payload["observed_at"] = shifted_at
+    shifted_payload["telemetry"]["newest_required_sample_at"] = shifted_at
+    shifted_payload["evidence_pass"]["started_at"] = shifted_at
+    shifted_payload["policy"]["evaluated_at"] = shifted_at
+    shifted = IncidentFacts.model_validate(shifted_payload)
+
+    first = service.submit_incident("tenant-a", "request-1", original, now=NOW)
+    duplicate = service.submit_incident("tenant-a", "request-1", shifted, now=NOW)
+
+    assert incident_facts_hash(original) == incident_facts_hash(shifted)
+    assert duplicate == first
+    assert len(store.snapshot().incidents) == 1
+
+
 def test_cross_tenant_lookup_and_update_are_non_disclosing() -> None:
     service = GuardianService(InMemoryIncidentStore())
     service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
@@ -200,6 +221,81 @@ def test_observation_cannot_change_the_incident_tenant_or_identity() -> None:
         )
 
     assert service.get_incident("tenant-a", "incident-1").observations == ()
+
+
+@pytest.mark.parametrize(
+    "replacement_facts",
+    [
+        facts(tenant_id="tenant-b"),
+        facts(severity=IncidentSeverity.CRITICAL),
+    ],
+)
+def test_store_rejects_replaced_facts_without_persisting(
+    replacement_facts: IncidentFacts,
+) -> None:
+    store = InMemoryIncidentStore()
+    service = GuardianService(store)
+    before = service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
+
+    with pytest.raises(IncidentInvariantError):
+        store.update(
+            "tenant-a",
+            "incident-1",
+            lambda current: current.model_copy(update={"facts": replacement_facts}),
+        )
+
+    assert store.get("tenant-a", "incident-1") == before
+
+
+@pytest.mark.parametrize("field", ["tenant_id", "incident_id", "workflow_id"])
+def test_store_rejects_outer_identity_changes_with_typed_error(field: str) -> None:
+    store = InMemoryIncidentStore()
+    service = GuardianService(store)
+    before = service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
+    changed = {
+        "tenant_id": "tenant-b",
+        "incident_id": "incident-2",
+        "workflow_id": "guardian/tenant-a/incident/incident-2",
+    }
+
+    with pytest.raises(IncidentInvariantError):
+        store.update(
+            "tenant-a",
+            "incident-1",
+            lambda current: current.model_copy(update={field: changed[field]}),
+        )
+
+    assert store.get("tenant-a", "incident-1") == before
+
+
+def test_store_rejects_truncated_or_modified_observation_history() -> None:
+    store = InMemoryIncidentStore()
+    service = GuardianService(store)
+    service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
+    first_observation = observation(
+        observed_at=NOW + timedelta(minutes=1), healthy=False
+    )
+    before = service.append_observation(
+        "tenant-a",
+        "incident-1",
+        first_observation,
+        now=NOW + timedelta(minutes=1),
+    )
+    invalid_histories = (
+        (),
+        (first_observation.model_copy(update={"service_healthy": True}),),
+    )
+
+    for invalid_history in invalid_histories:
+        with pytest.raises(IncidentInvariantError):
+            store.update(
+                "tenant-a",
+                "incident-1",
+                lambda current, history=invalid_history: current.model_copy(
+                    update={"observations": history}
+                ),
+            )
+        assert store.get("tenant-a", "incident-1") == before
 
 
 def test_observations_are_append_only_and_reevaluate_history_deterministically() -> (

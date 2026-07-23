@@ -10,7 +10,7 @@ import hashlib
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from threading import RLock
 from typing import Any, NoReturn, Self
@@ -28,6 +28,10 @@ from apps.guardian_api.models import (
 
 class IdempotencyConflictError(RuntimeError):
     """The same tenant-scoped key was reused for different canonical facts."""
+
+
+class IncidentInvariantError(RuntimeError):
+    """A store update attempted to rewrite immutable incident history."""
 
 
 class IncidentNotFoundError(LookupError):
@@ -99,7 +103,7 @@ def _canonical_value(value: Any) -> Any:
     if isinstance(value, Enum):
         return _canonical_value(value.value)
     if isinstance(value, datetime):
-        return value.isoformat()
+        return value.astimezone(UTC).isoformat()
     if isinstance(value, Mapping):
         return {
             str(key): _canonical_value(item)
@@ -144,6 +148,37 @@ def _copy_snapshot(snapshot: IncidentSnapshot) -> IncidentSnapshot:
             _FrozenDict(hypothesis.required_group_confidence),
         )
     return copied
+
+
+def _validate_update_invariants(
+    authenticated_tenant: str,
+    current: IncidentSnapshot,
+    replacement: IncidentSnapshot,
+) -> None:
+    immutable_identity_changed = (
+        current.tenant_id != authenticated_tenant
+        or current.facts.tenant_id != authenticated_tenant
+        or replacement.tenant_id != authenticated_tenant
+        or replacement.incident_id != current.incident_id
+        or replacement.workflow_id != current.workflow_id
+    )
+    if immutable_identity_changed:
+        raise IncidentInvariantError("incident identity is immutable")
+    if replacement.facts != current.facts:
+        raise IncidentInvariantError("initial incident facts are immutable")
+
+    prior_count = len(current.observations)
+    if (
+        len(replacement.observations) < prior_count
+        or replacement.observations[:prior_count] != current.observations
+    ):
+        raise IncidentInvariantError("observation history is append-only")
+    if any(
+        item.tenant_id != authenticated_tenant
+        or item.incident_id != current.incident_id
+        for item in replacement.observations[prior_count:]
+    ):
+        raise IncidentInvariantError("observation identity must match its incident")
 
 
 class InMemoryIncidentStore:
@@ -215,12 +250,7 @@ class InMemoryIncidentStore:
             if current is None:
                 raise IncidentNotFoundError
             replacement = update(_copy_snapshot(current))
-            if (
-                replacement.tenant_id != current.tenant_id
-                or replacement.incident_id != current.incident_id
-                or replacement.workflow_id != current.workflow_id
-            ):
-                raise ValueError("incident identity is immutable")
+            _validate_update_invariants(authenticated_tenant, current, replacement)
             stored = _copy_snapshot(replacement)
             self._incidents[identity] = stored
             return _copy_snapshot(stored)
