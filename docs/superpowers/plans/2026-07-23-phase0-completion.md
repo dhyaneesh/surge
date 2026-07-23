@@ -190,18 +190,22 @@ Expected: FAIL — `CollectorScenarioEvidenceProvider` missing.
 
 Wrap existing `EvidenceCollector` methods. Map scenario required evidence types via `required_evidence_sources_for_scenario` / `_required_signals`. Probe targets come from environment-specific config constructed in `build_adapter_registration()` (namespace, workload, endpoint URL placeholders from adapter release). Do **not** fabricate SigNoz samples; only call SigNoz paths when the env provider config includes an approved deterministic SigNoz contract handle.
 
-Wire in `registry.py`:
+Wire in `registry.py` for **every** entry in `SUPPORTED_ENVIRONMENTS` (not only
+otel-demo). Each environment gets its own targets config (namespace, workload,
+endpoint). Sketch:
 
 ```python
 return AdapterRegistration(
     ...,
     evidence_provider=CollectorScenarioEvidenceProvider(
         collector=EvidenceCollector(...),
-        targets=OTEL_DEMO_EVIDENCE_TARGETS,
+        targets=EVIDENCE_TARGETS_BY_ENV[environment],
     ),
 )
 ```
 
+Contract tests call `build_adapter_registration` per environment; leaving any
+env without a provider will fail closed incorrectly or raise at construction.
 - [ ] **Step 4: GREEN**
 
 ```bash
@@ -260,6 +264,7 @@ git add testbeds/scenarios/evidence_provider.py \
   tests/unit/test_evidence_provider.py \
   tests/integration/test_live_evidence_lifecycle.py \
   tests/integration/test_legitimate_demand_scale_up.py \
+  tests/integration/test_scenario_guardian_lifecycle.py \
   tests/security/test_scenario_guardian_security.py \
   tests/contract/test_scenario_execution_contract.py \
   docs/requirements/requirements.yaml docs/requirements/coverage.md
@@ -272,6 +277,7 @@ EOF
 )"
 ```
 
+Also ensure Commit 3 `git add` includes `scripts/test-phase0.sh` (created in Task 6).
 Run before commit if requirements changed:
 
 ```bash
@@ -425,7 +431,8 @@ EOF
 - Create: `scripts/install-test-observability.sh`
 - Create: `scripts/local-up.sh`
 - Create: `scripts/local-down.sh`
-- Create: `scripts/run-local-matrix.sh` (optional wrapper; required if matrix orchestration lives here)
+- Create: `scripts/test-phase0.sh`
+- Create: `scripts/run-local-matrix.sh` (full sequential five-env wrapper; optional for smoke)
 - Create: `testbeds/observability/signoz-values.yaml`
 - Create: `testbeds/observability/signoz-images.lock.yaml`
 
@@ -453,7 +460,23 @@ Expected: FAIL — scripts missing.
 
 - [ ] **Step 3: Implement scripts (minimal complete)**
 
-Follow parent plan Task 8 steps for bootstrap, cluster create, observability install, and orchestration. `local-up.sh` writes `artifacts/local/<run-id>/env` with `GUARDIAN_BASE_URL`, `GUARDIAN_SCENARIO_TOKEN`, `KUBECONFIG`, SigNoz forwards—without printing the token. `local-down.sh` reads the same state and deletes the owned cluster unless `GUARDIAN_CLUSTER_RETAIN=1`.
+Use pin values and isolation rules from parent **plan**
+`docs/superpowers/plans/2026-07-23-minimal-guardian-runtime.md` Task 8
+**Steps 3–5 only** (bootstrap-kind, create-test-cluster, install-test-observability,
+SigNoz values/lock). Do **not** copy that plan’s single EXIT-trap
+`run-local-matrix.sh --full` lifecycle as the primary UX.
+
+This plan’s orchestration model is **leave-up**:
+- `local-up.sh` creates cluster, installs deps, starts Guardian + port-forwards,
+  writes `artifacts/local/<run-id>/env`, and **exits 0 while leaving processes
+  running** (record PIDs for later teardown).
+- `local-down.sh` stops those PIDs and deletes the exact owned cluster unless
+  `GUARDIAN_CLUSTER_RETAIN=1`.
+- `run-local-matrix.sh` may still offer a trapped full-matrix mode for nightly,
+  but `task local:up` / `local:down` must work as a separable pair.
+
+`local-up.sh` must never print the bearer token. Include Docker engine
+reachability (and Docker Desktop/WSL notes where relevant) in preflight.
 
 - [ ] **Step 4: GREEN structural tests**
 
