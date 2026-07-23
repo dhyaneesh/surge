@@ -165,13 +165,11 @@ def test_manifest_targets_declare_dependencies_and_capabilities() -> None:
 
     baseline_targets = {
         "test:action-controller",
-        "test:integration",
         "test:keda-scaler",
         "test:policy",
         "test:reasoner",
         "test:replay",
         "test:replay-deterministic",
-        "test:security",
         "mcp:signoz:smoke",
         "diagnostics:signoz",
     }

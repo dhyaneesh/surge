@@ -12,6 +12,8 @@ from testbeds.models import (
     EnvironmentRelease,
     EnvironmentState,
     LoadExecution,
+    ObservedServiceIdentity,
+    WorkloadState,
 )
 from testbeds.scenarios.assertions import evaluate_assertions
 from testbeds.scenarios.execution import (
@@ -27,6 +29,9 @@ from testbeds.scenarios.v1alpha2 import EnvironmentCapability, GuardianScenarioV
 from tests.unit.test_guardian_scenario_v1alpha2 import document
 
 
+DIGEST = "sha256:" + "a" * 64
+
+
 class RecordingAdapter:
     capabilities = EnvironmentCapabilities(adjustable_load=True)
 
@@ -36,7 +41,20 @@ class RecordingAdapter:
 
     async def install(self, release):
         self.calls.append("install")
-        return EnvironmentState("otel-demo", self.namespace, release, healthy=True)
+        return EnvironmentState(
+            "otel-demo",
+            self.namespace,
+            release,
+            healthy=True,
+            services=(
+                ObservedServiceIdentity(
+                    "transaction-processor", "transaction-processor", "1.2.3", DIGEST
+                ),
+            ),
+            workloads=(
+                WorkloadState("transaction-processor", "transaction-processor", 3, 3),
+            ),
+        )
 
     async def reset(self):
         self.calls.append("reset")
@@ -59,7 +77,17 @@ class RecordingAdapter:
 
     async def observe_state(self):
         self.calls.append("observe")
-        return EnvironmentState(healthy=True)
+        return EnvironmentState(
+            healthy=True,
+            services=(
+                ObservedServiceIdentity(
+                    "transaction-processor", "transaction-processor", "1.2.3", DIGEST
+                ),
+            ),
+            workloads=(
+                WorkloadState("transaction-processor", "transaction-processor", 3, 3),
+            ),
+        )
 
     async def cleanup(self):
         self.calls.append("cleanup")
@@ -243,6 +271,7 @@ def test_executor_orders_lifecycle_and_persists_redacted_artifacts(tmp_path):
         "observe",
         "reset",
         "baseline",
+        "observe",
         "cleanup",
         "cleanup",
     ]
@@ -279,7 +308,7 @@ def test_failed_assertion_returns_failed_status_and_still_resets_and_cleans(tmp_
 
     assert result.status is ExecutionStatus.FAILED
     assert any(not assertion.passed for assertion in result.assertions)
-    assert adapter.calls[-4:] == ["reset", "baseline", "cleanup", "cleanup"]
+    assert adapter.calls[-5:] == ["reset", "baseline", "observe", "cleanup", "cleanup"]
 
 
 def test_duplicate_delivery_uses_one_idempotency_key(tmp_path):

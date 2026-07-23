@@ -43,6 +43,20 @@ test_implementations:
   test_file: tests/unit/test_guardian_domain.py
 - test_obligation_id: TST-GRD-TTL-006-UNIT
   test_file: tests/unit/test_guardian_domain.py
+- test_obligation_id: TST-GRD-TEN-001-INTEGRATION
+  test_file: tests/security/test_scenario_guardian_security.py
+- test_obligation_id: TST-GRD-TEN-002-INTEGRATION
+  test_file: tests/security/test_scenario_guardian_security.py
+- test_obligation_id: TST-GRD-WF-001-CONTRACT
+  test_file: tests/integration/test_scenario_guardian_lifecycle.py
+- test_obligation_id: TST-GRD-OPA-003-UNIT
+  test_file: tests/unit/test_scenario_facts.py
+- test_obligation_id: TST-GRD-OPA-006-UNIT
+  test_file: tests/unit/test_scenario_facts.py
+- test_obligation_id: TST-GRD-DRIFT-001-INTEGRATION
+  test_file: tests/unit/test_scenario_facts.py
+- test_obligation_id: TST-GRD-DRIFT-003-INTEGRATION
+  test_file: tests/unit/test_scenario_facts.py
 
 # DESIGN-RUNTIME-001 records only the process-local store/service capability.
 # This slice does not claim the Temporal, durable tenant-storage, or outbox

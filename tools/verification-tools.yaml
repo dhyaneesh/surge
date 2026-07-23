@@ -55,7 +55,7 @@ capabilities:
   typecheck: {availability: active}
   test:unit: {availability: active}
   test:contract: {availability: active}
-  test:integration: {availability: baseline, reason: no tests are configured}
+  test:integration: {availability: active}
   test:architecture: {availability: active}
   mcp:signoz:check: {availability: active}
   mcp:signoz:smoke: {availability: baseline, reason: no tests are configured}
@@ -68,7 +68,7 @@ capabilities:
   test:policy: {availability: baseline, reason: no tests are configured}
   test:replay: {availability: baseline, reason: no tests are configured}
   test:replay-deterministic: {availability: baseline, reason: no tests are configured}
-  test:security: {availability: baseline, reason: no tests are configured}
+  test:security: {availability: active}
   test:reasoner: {availability: baseline, reason: no tests are configured}
   test:keda-scaler: {availability: baseline, reason: no tests are configured}
   test:action-controller: {availability: baseline, reason: no tests are configured}
@@ -90,7 +90,7 @@ targets:
   typecheck: {dependencies: [task, uv, pyright], capabilities: [typecheck]}
   test:unit: {dependencies: [task, uv, pytest], capabilities: [test:unit]}
   test:contract: {dependencies: [task, uv, pytest], capabilities: [test:contract]}
-  test:integration: {dependencies: [], capabilities: [test:integration]}
+  test:integration: {dependencies: [task, uv, pytest], capabilities: [test:integration]}
   test:architecture: {dependencies: [task, uv, pytest], capabilities: [test:architecture]}
   mcp:signoz:check:
     dependencies: [task, uv, pytest]
@@ -112,7 +112,7 @@ targets:
   test:policy: {dependencies: [], capabilities: [test:policy]}
   test:replay: {dependencies: [], capabilities: [test:replay]}
   test:replay-deterministic: {dependencies: [], capabilities: [test:replay-deterministic]}
-  test:security: {dependencies: [], capabilities: [test:security]}
+  test:security: {dependencies: [task, uv, pytest], capabilities: [test:security]}
   test:reasoner: {dependencies: [], capabilities: [test:reasoner]}
   test:keda-scaler: {dependencies: [], capabilities: [test:keda-scaler]}
   test:action-controller: {dependencies: [], capabilities: [test:action-controller]}

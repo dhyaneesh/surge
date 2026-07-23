@@ -55,6 +55,8 @@ tasks:
   test:integration:
     cmds:
       - "{{.PREFLIGHT}} test:integration"
+      - "{{.UV}} run --locked --no-sync python -m tools.verification_harness suite test:integration tests/integration"
+      - "{{.UV}} run --locked pytest tests/integration"
 
   test:architecture:
     desc: Enforce Guardian production architecture boundaries
@@ -129,6 +131,8 @@ tasks:
   test:security:
     cmds:
       - "{{.PREFLIGHT}} test:security"
+      - "{{.UV}} run --locked --no-sync python -m tools.verification_harness suite test:security tests/security"
+      - "{{.UV}} run --locked pytest tests/security"
 
   test:reasoner:
     cmds:

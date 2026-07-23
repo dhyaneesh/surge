@@ -79,8 +79,10 @@ design_capabilities:
   - apps/guardian_api/models.py
   - apps/guardian_api/store.py
   - apps/guardian_api/service.py
+  - testbeds/scenarios/facts.py
   tests:
   - tests/unit/test_guardian_service.py
+  - tests/unit/test_scenario_facts.py
   status: implemented
 - id: DESIGN-RUNTIME-002
   source:
@@ -92,10 +94,17 @@ design_capabilities:
   - apps/guardian_api/models.py
   - apps/guardian_api/service.py
   - apps/guardian_api/store.py
+  - testbeds/scenarios/guardian_client.py
+  - testbeds/scenarios/execution.py
   tests:
   - tests/integration/test_guardian_http.py
   - tests/security/test_guardian_http_security.py
   - tests/unit/test_guardian_service.py
+  - tests/unit/test_scenario_facts.py
+  - tests/unit/test_guardian_scenario_client.py
+  - tests/unit/test_scenario_execution.py
+  - tests/integration/test_scenario_guardian_lifecycle.py
+  - tests/security/test_scenario_guardian_security.py
   status: implemented
 requirements:
 - id: GRD-REA-001
