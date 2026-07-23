@@ -11,10 +11,15 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from apps.guardian_api.models import (
+    ActionType,
     ControlFacts,
+    EvidenceFreshness,
     EvidencePass,
+    EvidenceSource,
+    HypothesisName,
     IncidentSeverity,
     IncidentSubmission,
+    NumericEvidence,
     ObservationUpdate,
     PolicyFacts,
     PolicyState,
@@ -22,6 +27,7 @@ from apps.guardian_api.models import (
     SignalFacts,
     TargetIdentity,
     TelemetryFacts,
+    WorkflowState,
 )
 from apps.guardian_api.service import GuardianService
 from apps.guardian_api.store import (
@@ -51,7 +57,37 @@ def _telemetry(observed_at: datetime, *, quality: float = 1.0) -> TelemetryFacts
     )
 
 
-def _submission(*, telemetry_quality: float = 1.0) -> IncidentSubmission:
+def _numeric(
+    value: float,
+    *,
+    baseline: float | None = None,
+    group: str,
+) -> NumericEvidence:
+    return NumericEvidence(
+        tenant_id=TENANT_ID,
+        subject_role="request-processor",
+        environment="production",
+        namespace="payments",
+        workload_kind="Deployment",
+        workload_name="processor",
+        service_name="processor",
+        value=value,
+        baseline_value=baseline,
+        observed_at=NOW,
+        freshness=EvidenceFreshness.FRESH,
+        source=EvidenceSource.QUERY_CONTRACT,
+        provenance_ref=f"query-contract/replay-{group}",
+        independence_group=group,
+        expected_samples=10_000,
+        usable_samples=10_000,
+    )
+
+
+def _submission(
+    *,
+    telemetry_quality: float = 1.0,
+    signals: SignalFacts | None = None,
+) -> IncidentSubmission:
     return IncidentSubmission(
         tenant_id=TENANT_ID,
         severity=IncidentSeverity.WARNING,
@@ -67,7 +103,7 @@ def _submission(*, telemetry_quality: float = 1.0) -> IncidentSubmission:
         ),
         telemetry=_telemetry(NOW, quality=telemetry_quality),
         evidence_pass=EvidencePass(completed_passes=1, started_at=NOW),
-        signals=SignalFacts(),
+        signals=signals if signals is not None else SignalFacts(),
         policy=PolicyFacts(state=PolicyState.FRESH, evaluated_at=NOW),
         control=ControlFacts(),
     )
@@ -106,6 +142,17 @@ def _canonical_events() -> tuple[IncidentSubmission | ObservationUpdate, ...]:
             sequence=2,
             healthy=True,
             observed_at=NOW + timedelta(minutes=2),
+        ),
+    )
+
+
+def _eligible_action_events() -> tuple[IncidentSubmission, ...]:
+    return (
+        _submission(
+            signals=SignalFacts(
+                request_rate=_numeric(200, baseline=100, group="load"),
+                cpu_utilization=_numeric(0.85, group="util"),
+            )
         ),
     )
 
@@ -186,6 +233,67 @@ def test_repeated_full_replays_are_identical_and_fact_change_is_observable() -> 
     )
 
 
+def test_eligible_action_replays_preserve_scores_transitions_and_gates() -> None:
+    first_snapshots, _ = _replay(_eligible_action_events())
+    second_snapshots, _ = _replay(_eligible_action_events())
+    first = first_snapshots[-1].projection_history
+    second = second_snapshots[-1].projection_history
+
+    assert _projection_hashes(first_snapshots[-1]) == _projection_hashes(
+        second_snapshots[-1]
+    )
+    assert tuple(
+        tuple(
+            (hypothesis.name, hypothesis.deterministic_score, hypothesis.eligible)
+            for hypothesis in projection.hypotheses
+        )
+        for projection in first
+    ) == tuple(
+        tuple(
+            (hypothesis.name, hypothesis.deterministic_score, hypothesis.eligible)
+            for hypothesis in projection.hypotheses
+        )
+        for projection in second
+    )
+    assert tuple(projection.workflow_state for projection in first) == (
+        WorkflowState.ASSESSMENT,
+        WorkflowState.CLASSIFIED,
+    )
+    assert tuple(projection.workflow_state for projection in first) == tuple(
+        projection.workflow_state for projection in second
+    )
+    assert tuple(
+        (
+            projection.permitted_actions,
+            projection.forbidden_actions,
+            projection.proposed_action,
+        )
+        for projection in first
+    ) == tuple(
+        (
+            projection.permitted_actions,
+            projection.forbidden_actions,
+            projection.proposed_action,
+        )
+        for projection in second
+    )
+    assert all(projection.model_participated is False for projection in first)
+    assert all(projection.model_participated is False for projection in second)
+
+    load_spike = next(
+        hypothesis
+        for hypothesis in first[-1].hypotheses
+        if hypothesis.name is HypothesisName.LOAD_SPIKE
+    )
+    assert load_spike.eligible is True
+    assert first[-1].proposed_action is ActionType.SCALE_UP
+    assert set(first[-1].forbidden_actions) == {
+        ActionType.SCALE_DOWN,
+        ActionType.ROLLBACK,
+        ActionType.PROTECT_DEPENDENCY,
+    }
+
+
 def test_duplicate_idempotent_delivery_leaves_projection_and_parent_unchanged() -> None:
     submission = _submission()
     snapshots, store = _replay((submission, submission))
@@ -198,11 +306,13 @@ def test_duplicate_idempotent_delivery_leaves_projection_and_parent_unchanged() 
     assert store.snapshot().idempotency_count == 1
 
 
-def test_reordered_duplicate_delivery_converges_to_one_parent_and_same_hashes() -> None:
+def test_interleaved_duplicate_delivery_converges_to_one_parent_and_same_hashes() -> (
+    None
+):
     submission, first, second = _canonical_events()
     canonical_snapshots, canonical_store = _replay((submission, first, second))
     reordered_snapshots, reordered_store = _replay(
-        (submission, first, second, first, submission)
+        (submission, first, first, second, submission)
     )
 
     assert _projection_hashes(reordered_snapshots[-1]) == _projection_hashes(
