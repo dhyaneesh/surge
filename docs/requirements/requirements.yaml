@@ -71,6 +71,16 @@ design_capabilities:
   - tests/unit/test_critical_scenario_pack.py
   - tests/contract/test_environment_capability_declarations.py
   status: implemented
+- id: DESIGN-RUNTIME-001
+  source:
+    document: docs/superpowers/specs/2026-07-23-minimal-guardian-runtime-design.md
+    section: Store and service boundary
+  implementation:
+  - apps/guardian_api/store.py
+  - apps/guardian_api/service.py
+  tests:
+  - tests/unit/test_guardian_service.py
+  status: implemented
 requirements:
 - id: GRD-REA-001
   source:

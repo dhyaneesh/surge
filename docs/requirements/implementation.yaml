@@ -44,6 +44,10 @@ test_implementations:
 - test_obligation_id: TST-GRD-TTL-006-UNIT
   test_file: tests/unit/test_guardian_domain.py
 
+# DESIGN-RUNTIME-001 records only the process-local store/service capability.
+# This slice does not claim the Temporal, durable tenant-storage, or outbox
+# obligations GRD-WF-001, GRD-TEN-001..003, or GRD-OUT-001..007.
+
 # Demo-required normative items must declare at least one scenario whose
 # compatible environment intersects the requirement's environment mapping.
 demo_scenarios: []
