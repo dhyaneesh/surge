@@ -25,6 +25,24 @@ requirement traceability only for requirements its tests directly implement.
 Do not add Postgres, Temporal, NATS, or further production service decomposition
 in this PR.
 
+### Done definition for this PR
+
+This PR is mergeable when commits 1–4 are complete and verified as follows:
+
+- Commit 1–2 gates pass without KinD (unit, contract, integration, security,
+  replay, architecture, requirements as applicable).
+- Commit 3 is complete when structural script tests pass **and** a real
+  `local:up` → at least one environment end-to-end → `local:down` proof has
+  been run on a machine with Docker and reported in the PR (CI does not run
+  KinD yet).
+- Commit 4 lands the PR and nightly workflows; PR CI stays green on the
+  non-KinD gate set.
+
+A green five-environment matrix and a green `task final` are **Phase 0 exit
+conditions**, not merge blockers for this PR. Nightly/manual matrix may still
+be red or flaky at merge time; remaining gaps must be reported honestly and
+must not be papered over by marking matrix requirements complete.
+
 ## Normative boundaries
 
 Preserve all safety rules from `AGENTS.md` and the parent design:
@@ -81,12 +99,18 @@ unless serialization requires a thin wrapper.
 ### Wiring
 
 - `AdapterRegistration` gains a required `evidence_provider`.
-- Remove static sample tuples as the production execution path.
+- Delete `evidence_samples` and `recovery_evidence_samples` from
+  `AdapterRegistration`; the executor must not accept injected sample tuples.
 - `build_adapter_registration()` constructs an environment-specific provider
-  that wraps `EvidenceCollector` with environment probe targets (endpoint,
-  Kubernetes workload, metrics API, rollout, queue/scaler, SigNoz as declared).
+  that wraps `EvidenceCollector` with environment probe targets declared by
+  that environment's evidence contracts (endpoint, Kubernetes workload, metrics
+  API, rollout, queue/scaler, and SigNoz only when an approved deterministic
+  SigNoz evidence contract is installed for that path).
 - Unit and integration tests may supply Protocol fakes. Fakes must not reuse
   assessment tuples as recovery evidence.
+- Align with the parent design: SigNoz-dependent scenarios remain unsupported
+  unless that deterministic SigNoz contract is present; the provider must not
+  fabricate SigNoz samples to force compatibility.
 
 ### Lifecycle
 
@@ -134,7 +158,11 @@ events only—no scenario identifiers and no expected blocks.
 4. Run the same full replay at least twice and require identical hash sequences.
 5. Verify duplicate events (same tenant-scoped idempotency key and payload) do
    not change the projection and preserve a single parent `workflow_id`.
-6. Change one fact and confirm the hash changes so the oracle is not vacuous.
+6. Verify **reordered duplicate** delivery (duplicate payloads presented in a
+   different order than the first acceptance path allows) still converges to
+   the same projection hashes and a single parent workflow, matching the parent
+   design's replay gate.
+7. Change one fact and confirm the hash changes so the oracle is not vacuous.
 
 ### Activation
 
@@ -184,9 +212,11 @@ matrix remains the heavy path.
 
 ### Verification
 
-Structural unit tests cover pins, isolation, and cleanup contracts. A real
-`local:up` → one environment pass → `local:down` path is reported honestly and
-may require Docker on the executing machine.
+Structural unit tests cover pins, isolation, and cleanup contracts. Before this
+PR merges, run a real `local:up` → at least one environment end-to-end →
+`local:down` on a Docker-capable machine and report the result in the PR. That
+manual/local proof is required for commit 3 completeness even though PR CI does
+not execute KinD.
 
 ## Commit 4 — CI
 
@@ -227,17 +257,22 @@ required PR check. That promotion is out of scope for the initial CI commit.
 
 ## Phase 0 exit conditions
 
-Do not begin the full production architecture until all of the following are
-true, and report remaining gaps honestly if any are incomplete:
+These are the criteria for starting the full production architecture. They are
+**broader than this PR's merge Done definition** (see Delivery model).
 
-- Live evidence is collected rather than injected
-- Recovery uses genuinely new evidence
-- Deterministic replay is active
-- A fresh machine can launch the stack with one command
-- At least one real environment passes end to end
-- Eventually, all five environment suites pass
-- CI publishes scenario artifacts and diagnostics
-- `task final` passes
+Do not begin the full production architecture until all of the following are
+true, and report remaining gaps honestly if any are incomplete after this PR
+merges:
+
+- Live evidence is collected rather than injected (this PR commit 1)
+- Recovery uses genuinely new evidence (this PR commit 1)
+- Deterministic replay is active (this PR commit 2)
+- A fresh machine can launch the stack with one command (this PR commit 3)
+- At least one real environment passes end to end (this PR commit 3 proof)
+- All five environment suites pass (may land via nightly hardening after merge)
+- CI publishes scenario artifacts and diagnostics (this PR commit 4)
+- `task final` passes (includes matrix; may remain incomplete until five-env
+  nightly is stable)
 
 ## Explicit exclusions
 
