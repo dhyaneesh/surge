@@ -146,6 +146,7 @@ class WorkflowState(StrEnum):
     TELEMETRY_FAILURE = "telemetry-failure"
     CONFLICT_RESOLUTION = "conflict-resolution"
     UNKNOWN = "unknown"
+    CLOSED = "closed"
 
 
 class PolicyDecision(StrEnum):

@@ -149,7 +149,9 @@ def _projection_to_snapshot(envelope: dict[str, Any]) -> GuardianSnapshot:
             else None
         ),
         policy_decision=projection.policy_decision.value,
-        policy_fail_closed=True,
+        # Envelope declares fail-closed; default True because this local runtime
+        # always fail-closes when the field is absent.
+        policy_fail_closed=bool(envelope.get("policy_fail_closed", True)),
         policy_bundle_state=envelope.get("policy_bundle_state"),
         permitted_operations=tuple(permitted),
         forbidden_operations=tuple(forbidden_ops),

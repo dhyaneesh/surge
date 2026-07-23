@@ -156,6 +156,25 @@ def _scale_up_samples(observed_at: datetime) -> tuple[EvidenceSample, ...]:
     )
 
 
+def _recovery_samples(observed_at: datetime) -> tuple[EvidenceSample, ...]:
+    """Distinct healthy post-reset samples (no elevated request_rate/cpu)."""
+
+    return (
+        EvidenceSample(
+            EvidenceSourceKind.SIGNOZ_TELEMETRY,
+            observed_at=observed_at,
+            provenance_ref="signoz/recovery-telemetry-quality",
+            values={
+                "quality": 1.0,
+                "usable_samples": 10,
+                "required_samples": 10,
+                "pipeline_available": True,
+                "comparison_valid": True,
+            },
+        ),
+    )
+
+
 @pytest.fixture()
 def server() -> Iterator[Any]:
     srv = create_server(
@@ -179,7 +198,9 @@ def test_legitimate_demand_scale_up_with_controlled_otel_demo_and_real_api(
         "testbeds/scenarios/legitimate-demand-scale-up.yaml"
     )
     adapter = ControlledOtelDemoAdapter(workspace=tmp_path / "otel")
-    samples = _scale_up_samples(datetime.now(UTC))
+    observed_at = datetime.now(UTC)
+    samples = _scale_up_samples(observed_at)
+    recovery = _recovery_samples(observed_at)
     registration = AdapterRegistration(
         environment="otel-demo",
         adapter=adapter,
@@ -189,6 +210,7 @@ def test_legitimate_demand_scale_up_with_controlled_otel_demo_and_real_api(
         fault_role_bindings={},
         deployment_bindings={},
         evidence_samples=samples,
+        recovery_evidence_samples=recovery,
     )
     client = HttpGuardianClient(
         f"http://{server.listening_address[0]}:{server.listening_address[1]}",

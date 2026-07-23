@@ -415,6 +415,16 @@ def evaluate_incident(
         else:
             scaler_result = ScalerResult.FRESH_VALUE
 
+    recovery_verified = _recovery_verified(
+        facts,
+        observation,
+        now=now,
+        assessment_healthy=telemetry_healthy,
+        foreign_evidence=foreign_evidence,
+    )
+    if recovery_verified:
+        workflow_state = WorkflowState.CLOSED
+
     return GuardianProjection(
         rules_version=RULE_DEFINITION.version,
         incident_class=incident_class,
@@ -434,12 +444,6 @@ def evaluate_incident(
         approval_nonce_expires_at=approval_nonce_expires_at,
         foreign_evidence_rejected=foreign_evidence,
         scaler_result=scaler_result,
-        recovery_verified=_recovery_verified(
-            facts,
-            observation,
-            now=now,
-            assessment_healthy=telemetry_healthy,
-            foreign_evidence=foreign_evidence,
-        ),
+        recovery_verified=recovery_verified,
         escalation_required=escalation_required,
     )

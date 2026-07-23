@@ -169,24 +169,23 @@ def _scenario_evidence_lists(
         elif key not in seen_contradict:
             contradicting.append(descriptor)
             seen_contradict.add(key)
-    # Metrics evidence for healthy observation when telemetry is present.
-    if facts.telemetry.quality >= 0.80 and facts.identity is not None:
-        metrics = {
-            "evidenceType": "metrics",
-            "subjectRole": facts.identity.target_role,
-            "tenantRelation": "same-tenant",
-            "freshness": "fresh",
-        }
-        key = json.dumps(metrics, sort_keys=True)
-        if key not in seen_support:
-            supporting.append(metrics)
     required_fresh: list[dict[str, Any]] = []
-    if snapshot.projection.recovery_verified and facts.identity is not None:
+    if (
+        snapshot.projection.recovery_verified
+        and snapshot.observations
+        and facts.identity is not None
+    ):
+        observation = snapshot.observations[-1]
+        tenant_relation = (
+            "same-tenant"
+            if observation.tenant_id == facts.tenant_id
+            else "foreign-tenant"
+        )
         required_fresh.append(
             {
                 "evidenceType": "recovery-telemetry",
                 "subjectRole": facts.identity.target_role,
-                "tenantRelation": "same-tenant",
+                "tenantRelation": tenant_relation,
                 "freshness": "fresh",
             }
         )
@@ -194,26 +193,19 @@ def _scenario_evidence_lists(
 
 
 def _scenario_workflow_states(snapshot: IncidentSnapshot) -> tuple[str, ...]:
+    # "active" marks that the incident exists; remaining states come only from
+    # persisted projection history (including the assessment preamble).
     states = ["active"]
     for projection in snapshot.projection_history:
         value = projection.workflow_state.value
         if value not in states:
             states.append(value)
-    if "assessment" not in states:
-        states.insert(1, "assessment")
-    if (
-        snapshot.projection.terminal_reason
-        or snapshot.projection.recovery_verified
-        or snapshot.projection.proposed_action is None
-    ):
-        if "closed" not in states:
-            states.append("closed")
     return tuple(states)
 
 
 def _scenario_safety_gates(snapshot: IncidentSnapshot) -> tuple[str, ...]:
     gates: list[str] = []
-    if snapshot.projection.recovery_verified:
+    if snapshot.projection.recovery_verified and len(snapshot.observations) >= 1:
         gates.append("post-action-evidence-for-recovery")
     return tuple(gates)
 
@@ -251,6 +243,7 @@ def _build_scenario_observation_payload(snapshot: IncidentSnapshot) -> dict[str,
         permitted_operations=tuple(item.value for item in projection.permitted_actions),
         forbidden_operations=tuple(item.value for item in projection.forbidden_actions),
         policy_bundle_state=snapshot.facts.policy.state.value,
+        policy_fail_closed=True,
         tenant_isolation=(
             {"foreignEvidenceRejected": True}
             if projection.foreign_evidence_rejected
@@ -288,6 +281,8 @@ class HTTPScenarioObservationSnapshot(StrictModel):
     permitted_operations: tuple[str, ...] = ()
     forbidden_operations: tuple[str, ...] = ()
     policy_bundle_state: str | None = None
+    # Local runtime is architecturally fail-closed for every scenario projection.
+    policy_fail_closed: bool = True
     tenant_isolation: dict[str, bool] | None = None
     mutations: tuple[dict[str, Any], ...] = ()
 

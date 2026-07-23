@@ -87,14 +87,16 @@ class IncidentSnapshot(StrictModel):
 
     @model_validator(mode="after")
     def histories_are_aligned(self) -> IncidentSnapshot:
-        expected = len(self.observations) + 1
-        if len(self.evaluation_times) != expected:
+        expected_evaluations = len(self.observations) + 1
+        if len(self.evaluation_times) != expected_evaluations:
             raise ValueError(
                 "evaluation history must align with facts and observations"
             )
-        if len(self.projection_history) != expected:
+        # Projection history may include an assessment preamble for the first
+        # evaluation, so it is allowed to be longer than evaluation_times.
+        if len(self.projection_history) < expected_evaluations:
             raise ValueError(
-                "projection history must align with facts and observations"
+                "projection history must cover facts and every observation"
             )
         if self.projection != self.projection_history[-1]:
             raise ValueError("final projection must be the latest history entry")
@@ -286,6 +288,32 @@ def _fail_closed_conflict_projection(
     )
 
 
+def _with_assessment_preamble(
+    projection: GuardianProjection,
+) -> tuple[GuardianProjection, ...]:
+    """Record assessment as the mandatory pre-classification phase.
+
+    The assessment entry is the same evaluation with workflow_state=ASSESSMENT;
+    scores and actions are unchanged.
+    """
+
+    if projection.workflow_state in {
+        WorkflowState.CLASSIFIED,
+        WorkflowState.CONFLICT_RESOLUTION,
+        WorkflowState.UNKNOWN,
+        WorkflowState.TELEMETRY_FAILURE,
+        WorkflowState.CLOSED,
+    }:
+        assessment = projection.model_copy(
+            update={
+                "workflow_state": WorkflowState.ASSESSMENT,
+                "recovery_verified": False,
+            }
+        )
+        return (assessment, projection)
+    return (projection,)
+
+
 def replay_incident_history(
     facts: IncidentFacts,
     observations: tuple[ObservationUpdate, ...],
@@ -303,7 +331,8 @@ def replay_incident_history(
         raise ObservationOrderError("replay history must be chronological")
     if observations and observations[0].observed_at < facts.observed_at:
         raise ObservationOrderError("observation cannot predate incident facts")
-    projections = [evaluate_incident(facts, now=evaluation_times[0])]
+    first = evaluate_incident(facts, now=evaluation_times[0])
+    projections = list(_with_assessment_preamble(first))
     for index, (observation, evaluated_at) in enumerate(
         zip(observations, evaluation_times[1:], strict=True),
         start=1,
@@ -370,9 +399,11 @@ class InMemoryIncidentStore:
         history = self._projector(facts, observations, evaluation_times, conflicts)
         if self._reentry_attempted:
             raise ReentrantStoreWriteError("projector attempted a nested write")
+        # History may include an assessment preamble before the first evaluation
+        # result, so length is at least observations+1 (not necessarily equal).
         if (
             not isinstance(history, tuple)
-            or len(history) != len(observations) + 1
+            or len(history) < len(observations) + 1
             or any(not isinstance(item, GuardianProjection) for item in history)
         ):
             raise ProjectionInvariantError("projector returned an invalid history")

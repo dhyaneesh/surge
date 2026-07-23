@@ -82,6 +82,8 @@ class AdapterRegistration:
     fault_role_bindings: Mapping[FaultType, str]
     deployment_bindings: Mapping[str, tuple[str, str]]
     evidence_samples: tuple[EvidenceSample | UnavailableEvidence, ...] = ()
+    # Distinct post-reset samples; must not reuse assessment spike evidence.
+    recovery_evidence_samples: tuple[EvidenceSample | UnavailableEvidence, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,8 +127,9 @@ def _control_stimulus(
     scenario: GuardianScenarioV1Alpha2, *, observed_at: datetime
 ) -> ControlStimulus:
     stimulus = scenario.spec.stimulus
-    # Recommendation-only recovery handoff: without executed mutations, stamp the
-    # assessment time so a later independent post-reset window can verify recovery.
+    # Assessment-handoff timestamp for recovery window gating (not a K8s mutation
+    # completion). Recommendation-only scenarios stamp this when recovery is
+    # expected so an independent post-reset observation can verify recovery.
     action_completed_at = (
         observed_at if scenario.spec.expected.recovery is not None else None
     )
@@ -151,6 +154,73 @@ def _evidence_for_context(
         "scenario execution requires collector evidence samples; "
         "empty evidence_samples cannot fabricate telemetry quality"
     )
+
+
+def _recovery_evidence_for_context(
+    registration: AdapterRegistration, observed_at: datetime
+) -> tuple[EvidenceSample | UnavailableEvidence, ...]:
+    """Post-reset samples must be independent of assessment spike evidence."""
+
+    if registration.recovery_evidence_samples:
+        return _refresh_sample_times(
+            registration.recovery_evidence_samples, observed_at
+        )
+    telemetry_only = _telemetry_only_healthy_samples(
+        registration.evidence_samples, observed_at
+    )
+    if telemetry_only:
+        return telemetry_only
+    # Do not refresh assessment spike evidence_samples to look fresh for recovery.
+    raise MissingEvidenceError(
+        "post-reset recovery requires distinct recovery_evidence_samples "
+        "(or telemetry-only healthy samples); assessment spike samples cannot "
+        "be reused as recovery evidence"
+    )
+
+
+_SPIKE_VALUE_KEYS = frozenset(
+    {
+        "request_rate",
+        "baseline_request_rate",
+        "cpu_utilization",
+        "memory_utilization",
+        "error_rate",
+        "baseline_error_rate",
+        "p95_latency_ms",
+        "restart_delta",
+        "throttling_ratio",
+    }
+)
+
+
+def _telemetry_only_healthy_samples(
+    samples: Sequence[EvidenceSample | UnavailableEvidence],
+    observed_at: datetime,
+) -> tuple[EvidenceSample, ...]:
+    """Keep only healthy SigNoz telemetry samples without load/util spike values."""
+
+    from testbeds.evidence.contracts import EvidenceSourceKind
+
+    selected: list[EvidenceSample] = []
+    for item in samples:
+        if not isinstance(item, EvidenceSample):
+            continue
+        if item.source_kind is not EvidenceSourceKind.SIGNOZ_TELEMETRY:
+            continue
+        if float(item.values.get("quality", 0.0)) < 0.80:
+            continue
+        if _SPIKE_VALUE_KEYS.intersection(item.values):
+            continue
+        selected.append(
+            EvidenceSample(
+                item.source_kind,
+                observed_at=observed_at,
+                provenance_ref=item.provenance_ref,
+                values=item.values,
+                diagnostics=item.diagnostics,
+            )
+        )
+    return tuple(selected)
 
 
 def _refresh_sample_times(
@@ -624,7 +694,7 @@ class ScenarioExecutor:
             return
         fresh_state = await bounded(registration.adapter.observe_state())
         observed_at = datetime.now(UTC)
-        recovery_samples = _evidence_for_context(registration, observed_at)
+        recovery_samples = _recovery_evidence_for_context(registration, observed_at)
         handoff = ctx.control.action_completed_at
         window_started_at = observed_at - timedelta(seconds=30)
         if handoff is not None and window_started_at <= handoff:
