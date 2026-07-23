@@ -24,12 +24,14 @@
 - `testbeds/scenarios/execution.py` — require provider; collect live; write evidence artifacts; delete `_refresh_sample_times` and static sample fields
 - `testbeds/scenarios/registry.py` — construct env-specific provider in `build_adapter_registration`
 - `tests/unit/test_scenario_execution.py` — fake providers instead of static samples
+- `tests/unit/test_evidence_provider.py` — collector provider unit tests
 - `tests/integration/test_live_evidence_lifecycle.py` — assessment vs recovery timestamps/provenance + artifact files
 - `tests/replay/test_deterministic_replay.py` — canonical replay suite
 - `Taskfile.yml` / `tools/verification-tools.yaml` — activate replay; add `local:*` / `test:phase0`
-- `scripts/bootstrap-kind.sh`, `create-test-cluster.sh`, `install-test-observability.sh`, `local-up.sh`, `local-down.sh`, `run-local-matrix.sh`
+- `scripts/bootstrap-kind.sh`, `create-test-cluster.sh`, `install-test-observability.sh`, `local-up.sh`, `local-down.sh`, `test-phase0.sh`, `run-local-matrix.sh`
 - `testbeds/observability/signoz-values.yaml`, `signoz-images.lock.yaml`
 - `tests/unit/test_local_cluster_scripts.py`
+- `tests/unit/test_github_workflows.py`
 - `.github/workflows/pull-request.yml`, `kind-matrix.yml`
 - `docs/requirements/requirements.yaml` — only requirements directly proven by new tests
 
@@ -277,7 +279,6 @@ EOF
 )"
 ```
 
-Also ensure Commit 3 `git add` includes `scripts/test-phase0.sh` (created in Task 6).
 Run before commit if requirements changed:
 
 ```bash
