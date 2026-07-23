@@ -17,6 +17,9 @@ scenarios:
         - emit-incident
         missingObservations:
         - tenant-rejection
+        requiredEvidenceSources:
+        - endpoint-probe
+        missingEvidenceSources: []
         blockingReasons: []
       aws-retail:
         status: unsupported
@@ -34,6 +37,9 @@ scenarios:
         - emit-incident
         missingObservations:
         - tenant-rejection
+        requiredEvidenceSources:
+        - endpoint-probe
+        missingEvidenceSources: []
         blockingReasons: []
       keda-rabbitmq:
         status: unsupported
@@ -51,6 +57,9 @@ scenarios:
         - emit-incident
         missingObservations:
         - tenant-rejection
+        requiredEvidenceSources:
+        - endpoint-probe
+        missingEvidenceSources: []
         blockingReasons: []
       online-boutique:
         status: unsupported
@@ -68,6 +77,9 @@ scenarios:
         - emit-incident
         missingObservations:
         - tenant-rejection
+        requiredEvidenceSources:
+        - endpoint-probe
+        missingEvidenceSources: []
         blockingReasons: []
       otel-demo:
         status: unsupported
@@ -85,6 +97,9 @@ scenarios:
         - emit-incident
         missingObservations:
         - tenant-rejection
+        requiredEvidenceSources:
+        - endpoint-probe
+        missingEvidenceSources: []
         blockingReasons: []
   dependency-failure-do-not-scale-caller:
     environments:
@@ -109,7 +124,13 @@ scenarios:
         missingObservations:
         - dependency-topology
         - workload-state
-        blockingReasons: []
+        requiredEvidenceSources:
+        - kubernetes-workload
+        - metrics-api
+        missingEvidenceSources:
+        - metrics-api
+        blockingReasons:
+        - evidence-source-unavailable
       aws-retail:
         status: supported
         missingCapabilities: []
@@ -126,6 +147,10 @@ scenarios:
         - workload-state
         missingAdapterOperations: []
         missingObservations: []
+        requiredEvidenceSources:
+        - kubernetes-workload
+        - metrics-api
+        missingEvidenceSources: []
         blockingReasons: []
       keda-rabbitmq:
         status: unsupported
@@ -147,7 +172,13 @@ scenarios:
         - inject-fault
         missingObservations:
         - dependency-topology
-        blockingReasons: []
+        requiredEvidenceSources:
+        - kubernetes-workload
+        - metrics-api
+        missingEvidenceSources:
+        - metrics-api
+        blockingReasons:
+        - evidence-source-unavailable
       online-boutique:
         status: supported
         missingCapabilities: []
@@ -164,6 +195,10 @@ scenarios:
         - workload-state
         missingAdapterOperations: []
         missingObservations: []
+        requiredEvidenceSources:
+        - kubernetes-workload
+        - metrics-api
+        missingEvidenceSources: []
         blockingReasons: []
       otel-demo:
         status: supported
@@ -181,6 +216,10 @@ scenarios:
         - workload-state
         missingAdapterOperations: []
         missingObservations: []
+        requiredEvidenceSources:
+        - kubernetes-workload
+        - metrics-api
+        missingEvidenceSources: []
         blockingReasons: []
   deployment-error-regression:
     environments:
@@ -200,6 +239,11 @@ scenarios:
         - workflow-state
         missingAdapterOperations: []
         missingObservations: []
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - rollout-state
+        missingEvidenceSources: []
         blockingReasons: []
       aws-retail:
         status: unsupported
@@ -223,6 +267,11 @@ scenarios:
         missingObservations:
         - deployment-version
         - recovery-evidence
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - rollout-state
+        missingEvidenceSources: []
         blockingReasons: []
       keda-rabbitmq:
         status: unsupported
@@ -246,6 +295,11 @@ scenarios:
         missingObservations:
         - deployment-version
         - recovery-evidence
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - rollout-state
+        missingEvidenceSources: []
         blockingReasons: []
       online-boutique:
         status: unsupported
@@ -269,6 +323,11 @@ scenarios:
         missingObservations:
         - deployment-version
         - recovery-evidence
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - rollout-state
+        missingEvidenceSources: []
         blockingReasons: []
       otel-demo:
         status: unsupported
@@ -292,6 +351,11 @@ scenarios:
         missingObservations:
         - deployment-version
         - recovery-evidence
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - rollout-state
+        missingEvidenceSources: []
         blockingReasons: []
   deployment-latency-regression:
     environments:
@@ -314,6 +378,11 @@ scenarios:
         missingAdapterOperations: []
         missingObservations:
         - dependency-topology
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - rollout-state
+        missingEvidenceSources: []
         blockingReasons: []
       aws-retail:
         status: unsupported
@@ -338,6 +407,11 @@ scenarios:
         missingObservations:
         - deployment-version
         - recovery-evidence
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - rollout-state
+        missingEvidenceSources: []
         blockingReasons: []
       keda-rabbitmq:
         status: unsupported
@@ -364,6 +438,11 @@ scenarios:
         - dependency-topology
         - deployment-version
         - recovery-evidence
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - rollout-state
+        missingEvidenceSources: []
         blockingReasons: []
       online-boutique:
         status: unsupported
@@ -388,6 +467,11 @@ scenarios:
         missingObservations:
         - deployment-version
         - recovery-evidence
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - rollout-state
+        missingEvidenceSources: []
         blockingReasons: []
       otel-demo:
         status: unsupported
@@ -412,6 +496,11 @@ scenarios:
         missingObservations:
         - deployment-version
         - recovery-evidence
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - rollout-state
+        missingEvidenceSources: []
         blockingReasons: []
   duplicate-alert-single-workflow:
     environments:
@@ -429,6 +518,8 @@ scenarios:
         missingAdapterOperations:
         - emit-incident
         missingObservations: []
+        requiredEvidenceSources: []
+        missingEvidenceSources: []
         blockingReasons: []
       aws-retail:
         status: unsupported
@@ -444,6 +535,8 @@ scenarios:
         missingAdapterOperations:
         - emit-incident
         missingObservations: []
+        requiredEvidenceSources: []
+        missingEvidenceSources: []
         blockingReasons: []
       keda-rabbitmq:
         status: unsupported
@@ -459,6 +552,8 @@ scenarios:
         missingAdapterOperations:
         - emit-incident
         missingObservations: []
+        requiredEvidenceSources: []
+        missingEvidenceSources: []
         blockingReasons: []
       online-boutique:
         status: unsupported
@@ -474,6 +569,8 @@ scenarios:
         missingAdapterOperations:
         - emit-incident
         missingObservations: []
+        requiredEvidenceSources: []
+        missingEvidenceSources: []
         blockingReasons: []
       otel-demo:
         status: unsupported
@@ -489,6 +586,8 @@ scenarios:
         missingAdapterOperations:
         - emit-incident
         missingObservations: []
+        requiredEvidenceSources: []
+        missingEvidenceSources: []
         blockingReasons: []
   expired-approval-no-mutation:
     environments:
@@ -506,6 +605,8 @@ scenarios:
         missingAdapterOperations:
         - control-approval
         missingObservations: []
+        requiredEvidenceSources: []
+        missingEvidenceSources: []
         blockingReasons: []
       aws-retail:
         status: unsupported
@@ -521,6 +622,8 @@ scenarios:
         missingAdapterOperations:
         - control-approval
         missingObservations: []
+        requiredEvidenceSources: []
+        missingEvidenceSources: []
         blockingReasons: []
       keda-rabbitmq:
         status: unsupported
@@ -536,6 +639,8 @@ scenarios:
         missingAdapterOperations:
         - control-approval
         missingObservations: []
+        requiredEvidenceSources: []
+        missingEvidenceSources: []
         blockingReasons: []
       online-boutique:
         status: unsupported
@@ -551,6 +656,8 @@ scenarios:
         missingAdapterOperations:
         - control-approval
         missingObservations: []
+        requiredEvidenceSources: []
+        missingEvidenceSources: []
         blockingReasons: []
       otel-demo:
         status: unsupported
@@ -566,6 +673,8 @@ scenarios:
         missingAdapterOperations:
         - control-approval
         missingObservations: []
+        requiredEvidenceSources: []
+        missingEvidenceSources: []
         blockingReasons: []
   healthy-load-no-action:
     environments:
@@ -587,6 +696,9 @@ scenarios:
         - apply-load
         missingObservations:
         - workload-state
+        requiredEvidenceSources:
+        - endpoint-probe
+        missingEvidenceSources: []
         blockingReasons: []
       aws-retail:
         status: supported
@@ -603,6 +715,9 @@ scenarios:
         - workload-state
         missingAdapterOperations: []
         missingObservations: []
+        requiredEvidenceSources:
+        - endpoint-probe
+        missingEvidenceSources: []
         blockingReasons: []
       keda-rabbitmq:
         status: supported
@@ -619,6 +734,9 @@ scenarios:
         - workload-state
         missingAdapterOperations: []
         missingObservations: []
+        requiredEvidenceSources:
+        - endpoint-probe
+        missingEvidenceSources: []
         blockingReasons: []
       online-boutique:
         status: supported
@@ -635,6 +753,9 @@ scenarios:
         - workload-state
         missingAdapterOperations: []
         missingObservations: []
+        requiredEvidenceSources:
+        - endpoint-probe
+        missingEvidenceSources: []
         blockingReasons: []
       otel-demo:
         status: supported
@@ -651,6 +772,9 @@ scenarios:
         - workload-state
         missingAdapterOperations: []
         missingObservations: []
+        requiredEvidenceSources:
+        - endpoint-probe
+        missingEvidenceSources: []
         blockingReasons: []
   healthy-telemetry-unknown-cause:
     environments:
@@ -672,7 +796,12 @@ scenarios:
         - inject-fault
         missingObservations:
         - telemetry-quality
-        blockingReasons: []
+        requiredEvidenceSources:
+        - signoz-telemetry
+        missingEvidenceSources:
+        - signoz-telemetry
+        blockingReasons:
+        - evidence-source-unavailable
       aws-retail:
         status: unsupported
         missingCapabilities:
@@ -690,7 +819,12 @@ scenarios:
         missingAdapterOperations: []
         missingObservations:
         - telemetry-quality
-        blockingReasons: []
+        requiredEvidenceSources:
+        - signoz-telemetry
+        missingEvidenceSources:
+        - signoz-telemetry
+        blockingReasons:
+        - evidence-source-unavailable
       keda-rabbitmq:
         status: unsupported
         missingCapabilities:
@@ -709,7 +843,12 @@ scenarios:
         - inject-fault
         missingObservations:
         - telemetry-quality
-        blockingReasons: []
+        requiredEvidenceSources:
+        - signoz-telemetry
+        missingEvidenceSources:
+        - signoz-telemetry
+        blockingReasons:
+        - evidence-source-unavailable
       online-boutique:
         status: unsupported
         missingCapabilities:
@@ -727,7 +866,12 @@ scenarios:
         missingAdapterOperations: []
         missingObservations:
         - telemetry-quality
-        blockingReasons: []
+        requiredEvidenceSources:
+        - signoz-telemetry
+        missingEvidenceSources:
+        - signoz-telemetry
+        blockingReasons:
+        - evidence-source-unavailable
       otel-demo:
         status: unsupported
         missingCapabilities:
@@ -745,7 +889,12 @@ scenarios:
         missingAdapterOperations: []
         missingObservations:
         - telemetry-quality
-        blockingReasons: []
+        requiredEvidenceSources:
+        - signoz-telemetry
+        missingEvidenceSources:
+        - signoz-telemetry
+        blockingReasons:
+        - evidence-source-unavailable
   legitimate-demand-scale-up:
     environments:
       argo-rollouts:
@@ -771,7 +920,14 @@ scenarios:
         missingObservations:
         - dependency-topology
         - workload-state
-        blockingReasons: []
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - metrics-api
+        missingEvidenceSources:
+        - metrics-api
+        blockingReasons:
+        - evidence-source-unavailable
       aws-retail:
         status: unsupported
         missingCapabilities:
@@ -792,6 +948,11 @@ scenarios:
         missingAdapterOperations: []
         missingObservations:
         - recovery-evidence
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - metrics-api
+        missingEvidenceSources: []
         blockingReasons: []
       keda-rabbitmq:
         status: unsupported
@@ -814,7 +975,14 @@ scenarios:
         missingObservations:
         - dependency-topology
         - recovery-evidence
-        blockingReasons: []
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - metrics-api
+        missingEvidenceSources:
+        - metrics-api
+        blockingReasons:
+        - evidence-source-unavailable
       online-boutique:
         status: unsupported
         missingCapabilities:
@@ -835,6 +1003,11 @@ scenarios:
         missingAdapterOperations: []
         missingObservations:
         - recovery-evidence
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - metrics-api
+        missingEvidenceSources: []
         blockingReasons: []
       otel-demo:
         status: unsupported
@@ -856,6 +1029,11 @@ scenarios:
         missingAdapterOperations: []
         missingObservations:
         - recovery-evidence
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - metrics-api
+        missingEvidenceSources: []
         blockingReasons: []
   operator-drift-supersedes-action:
     environments:
@@ -875,6 +1053,8 @@ scenarios:
         - mutate-workload
         missingObservations:
         - workload-state
+        requiredEvidenceSources: []
+        missingEvidenceSources: []
         blockingReasons: []
       aws-retail:
         status: unsupported
@@ -891,6 +1071,8 @@ scenarios:
         missingAdapterOperations:
         - mutate-workload
         missingObservations: []
+        requiredEvidenceSources: []
+        missingEvidenceSources: []
         blockingReasons: []
       keda-rabbitmq:
         status: unsupported
@@ -907,6 +1089,8 @@ scenarios:
         missingAdapterOperations:
         - mutate-workload
         missingObservations: []
+        requiredEvidenceSources: []
+        missingEvidenceSources: []
         blockingReasons: []
       online-boutique:
         status: unsupported
@@ -923,6 +1107,8 @@ scenarios:
         missingAdapterOperations:
         - mutate-workload
         missingObservations: []
+        requiredEvidenceSources: []
+        missingEvidenceSources: []
         blockingReasons: []
       otel-demo:
         status: unsupported
@@ -939,6 +1125,8 @@ scenarios:
         missingAdapterOperations:
         - mutate-workload
         missingObservations: []
+        requiredEvidenceSources: []
+        missingEvidenceSources: []
         blockingReasons: []
   resource-saturation:
     environments:
@@ -965,7 +1153,14 @@ scenarios:
         missingObservations:
         - dependency-topology
         - workload-state
-        blockingReasons: []
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - metrics-api
+        missingEvidenceSources:
+        - metrics-api
+        blockingReasons:
+        - evidence-source-unavailable
       aws-retail:
         status: unsupported
         missingCapabilities:
@@ -987,6 +1182,11 @@ scenarios:
         missingAdapterOperations: []
         missingObservations:
         - recovery-evidence
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - metrics-api
+        missingEvidenceSources: []
         blockingReasons: []
       keda-rabbitmq:
         status: unsupported
@@ -1011,7 +1211,14 @@ scenarios:
         missingObservations:
         - dependency-topology
         - recovery-evidence
-        blockingReasons: []
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - metrics-api
+        missingEvidenceSources:
+        - metrics-api
+        blockingReasons:
+        - evidence-source-unavailable
       online-boutique:
         status: unsupported
         missingCapabilities:
@@ -1033,6 +1240,11 @@ scenarios:
         missingAdapterOperations: []
         missingObservations:
         - recovery-evidence
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - metrics-api
+        missingEvidenceSources: []
         blockingReasons: []
       otel-demo:
         status: unsupported
@@ -1055,6 +1267,11 @@ scenarios:
         missingAdapterOperations: []
         missingObservations:
         - recovery-evidence
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - metrics-api
+        missingEvidenceSources: []
         blockingReasons: []
   scale-versus-rollback-conflict:
     environments:
@@ -1080,6 +1297,11 @@ scenarios:
         - apply-load
         missingObservations:
         - workload-state
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - rollout-state
+        missingEvidenceSources: []
         blockingReasons: []
       aws-retail:
         status: unsupported
@@ -1106,6 +1328,11 @@ scenarios:
         missingObservations:
         - deployment-version
         - recovery-evidence
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - rollout-state
+        missingEvidenceSources: []
         blockingReasons: []
       keda-rabbitmq:
         status: unsupported
@@ -1131,6 +1358,11 @@ scenarios:
         missingObservations:
         - deployment-version
         - recovery-evidence
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - rollout-state
+        missingEvidenceSources: []
         blockingReasons: []
       online-boutique:
         status: unsupported
@@ -1157,6 +1389,11 @@ scenarios:
         missingObservations:
         - deployment-version
         - recovery-evidence
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - rollout-state
+        missingEvidenceSources: []
         blockingReasons: []
       otel-demo:
         status: unsupported
@@ -1183,6 +1420,11 @@ scenarios:
         missingObservations:
         - deployment-version
         - recovery-evidence
+        requiredEvidenceSources:
+        - endpoint-probe
+        - kubernetes-workload
+        - rollout-state
+        missingEvidenceSources: []
         blockingReasons: []
   stale-opa-fail-closed:
     environments:
@@ -1202,6 +1444,8 @@ scenarios:
         - control-policy-bundle
         missingObservations:
         - policy-state
+        requiredEvidenceSources: []
+        missingEvidenceSources: []
         blockingReasons: []
       aws-retail:
         status: unsupported
@@ -1219,6 +1463,8 @@ scenarios:
         - control-policy-bundle
         missingObservations:
         - policy-state
+        requiredEvidenceSources: []
+        missingEvidenceSources: []
         blockingReasons: []
       keda-rabbitmq:
         status: unsupported
@@ -1236,6 +1482,8 @@ scenarios:
         - control-policy-bundle
         missingObservations:
         - policy-state
+        requiredEvidenceSources: []
+        missingEvidenceSources: []
         blockingReasons: []
       online-boutique:
         status: unsupported
@@ -1253,6 +1501,8 @@ scenarios:
         - control-policy-bundle
         missingObservations:
         - policy-state
+        requiredEvidenceSources: []
+        missingEvidenceSources: []
         blockingReasons: []
       otel-demo:
         status: unsupported
@@ -1270,6 +1520,8 @@ scenarios:
         - control-policy-bundle
         missingObservations:
         - policy-state
+        requiredEvidenceSources: []
+        missingEvidenceSources: []
         blockingReasons: []
   stale-signoz-no-scale-down:
     environments:
@@ -1292,7 +1544,12 @@ scenarios:
         missingObservations:
         - scaler-result
         - telemetry-quality
-        blockingReasons: []
+        requiredEvidenceSources:
+        - signoz-telemetry
+        missingEvidenceSources:
+        - signoz-telemetry
+        blockingReasons:
+        - evidence-source-unavailable
       aws-retail:
         status: unsupported
         missingCapabilities:
@@ -1312,7 +1569,12 @@ scenarios:
         missingObservations:
         - scaler-result
         - telemetry-quality
-        blockingReasons: []
+        requiredEvidenceSources:
+        - signoz-telemetry
+        missingEvidenceSources:
+        - signoz-telemetry
+        blockingReasons:
+        - evidence-source-unavailable
       keda-rabbitmq:
         status: unsupported
         missingCapabilities:
@@ -1329,7 +1591,12 @@ scenarios:
         - interrupt-telemetry
         missingObservations:
         - telemetry-quality
-        blockingReasons: []
+        requiredEvidenceSources:
+        - signoz-telemetry
+        missingEvidenceSources:
+        - signoz-telemetry
+        blockingReasons:
+        - evidence-source-unavailable
       online-boutique:
         status: unsupported
         missingCapabilities:
@@ -1349,7 +1616,12 @@ scenarios:
         missingObservations:
         - scaler-result
         - telemetry-quality
-        blockingReasons: []
+        requiredEvidenceSources:
+        - signoz-telemetry
+        missingEvidenceSources:
+        - signoz-telemetry
+        blockingReasons:
+        - evidence-source-unavailable
       otel-demo:
         status: unsupported
         missingCapabilities:
@@ -1369,7 +1641,12 @@ scenarios:
         missingObservations:
         - scaler-result
         - telemetry-quality
-        blockingReasons: []
+        requiredEvidenceSources:
+        - signoz-telemetry
+        missingEvidenceSources:
+        - signoz-telemetry
+        blockingReasons:
+        - evidence-source-unavailable
   telemetry-failure:
     environments:
       argo-rollouts:
@@ -1391,7 +1668,12 @@ scenarios:
         - interrupt-telemetry
         missingObservations:
         - telemetry-quality
-        blockingReasons: []
+        requiredEvidenceSources:
+        - signoz-telemetry
+        missingEvidenceSources:
+        - signoz-telemetry
+        blockingReasons:
+        - evidence-source-unavailable
       aws-retail:
         status: unsupported
         missingCapabilities:
@@ -1413,7 +1695,12 @@ scenarios:
         missingObservations:
         - recovery-evidence
         - telemetry-quality
-        blockingReasons: []
+        requiredEvidenceSources:
+        - signoz-telemetry
+        missingEvidenceSources:
+        - signoz-telemetry
+        blockingReasons:
+        - evidence-source-unavailable
       keda-rabbitmq:
         status: unsupported
         missingCapabilities:
@@ -1435,7 +1722,12 @@ scenarios:
         missingObservations:
         - recovery-evidence
         - telemetry-quality
-        blockingReasons: []
+        requiredEvidenceSources:
+        - signoz-telemetry
+        missingEvidenceSources:
+        - signoz-telemetry
+        blockingReasons:
+        - evidence-source-unavailable
       online-boutique:
         status: unsupported
         missingCapabilities:
@@ -1457,7 +1749,12 @@ scenarios:
         missingObservations:
         - recovery-evidence
         - telemetry-quality
-        blockingReasons: []
+        requiredEvidenceSources:
+        - signoz-telemetry
+        missingEvidenceSources:
+        - signoz-telemetry
+        blockingReasons:
+        - evidence-source-unavailable
       otel-demo:
         status: unsupported
         missingCapabilities:
@@ -1479,4 +1776,9 @@ scenarios:
         missingObservations:
         - recovery-evidence
         - telemetry-quality
-        blockingReasons: []
+        requiredEvidenceSources:
+        - signoz-telemetry
+        missingEvidenceSources:
+        - signoz-telemetry
+        blockingReasons:
+        - evidence-source-unavailable

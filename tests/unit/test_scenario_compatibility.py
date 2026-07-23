@@ -1,5 +1,6 @@
 import copy
 
+from testbeds.evidence.contracts import EvidenceSourceKind
 from testbeds.scenarios.compatibility import (
     BlockingReason,
     EnvironmentDeclaration,
@@ -10,12 +11,21 @@ from testbeds.scenarios.compatibility import (
 from testbeds.scenarios.v1alpha2 import GuardianScenarioV1Alpha2
 from tests.unit.test_guardian_scenario_v1alpha2 import document
 
+_DOCUMENT_EVIDENCE = (
+    EvidenceSourceKind.ENDPOINT_PROBE.value,
+    EvidenceSourceKind.KUBERNETES_WORKLOAD.value,
+    EvidenceSourceKind.METRICS_API.value,
+)
 
-def declaration(*capabilities: str, planned=()) -> EnvironmentDeclaration:
+
+def declaration(
+    *capabilities: str, planned=(), evidence_sources=_DOCUMENT_EVIDENCE
+) -> EnvironmentDeclaration:
     return EnvironmentDeclaration.model_validate(
         {
             "environment": "otel-demo",
             "capabilities": capabilities,
+            "evidenceSources": evidence_sources,
             "plannedSupport": planned,
         }
     )

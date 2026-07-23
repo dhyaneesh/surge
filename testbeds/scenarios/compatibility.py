@@ -1,4 +1,4 @@
-"""Pure capability-driven compatibility and preflight derivation."""
+"""Pure capability- and evidence-driven compatibility and preflight derivation."""
 
 from __future__ import annotations
 
@@ -6,6 +6,11 @@ from enum import StrEnum
 
 from pydantic import model_validator
 
+from testbeds.evidence.contracts import (
+    EvidenceSourceKind,
+    missing_evidence_sources_for_scenario,
+    required_evidence_sources_for_scenario,
+)
 from testbeds.scenarios.models import StrictModel
 from testbeds.scenarios.v1alpha2 import EnvironmentCapability, GuardianScenarioV1Alpha2
 
@@ -143,6 +148,7 @@ class BlockingReason(StrEnum):
     ADAPTER_NOT_IMPLEMENTED = "adapter-not-implemented"
     OBSERVATION_NOT_IMPLEMENTED = "observation-not-implemented"
     SCENARIO_REQUIRES_UPGRADE = "scenario-requires-explicit-v1alpha2-upgrade"
+    EVIDENCE_SOURCE_UNAVAILABLE = "evidence-source-unavailable"
 
 
 class PlannedRequirementSupport(StrictModel):
@@ -153,6 +159,7 @@ class PlannedRequirementSupport(StrictModel):
 class EnvironmentDeclaration(StrictModel):
     environment: str
     capabilities: frozenset[EnvironmentCapability]
+    evidence_sources: frozenset[EvidenceSourceKind] = frozenset()
     planned_support: tuple[PlannedRequirementSupport, ...] = ()
 
     @model_validator(mode="after")
@@ -176,6 +183,8 @@ class ScenarioPreflightResult(StrictModel):
     required_observations: tuple[ObservationType, ...]
     missing_adapter_operations: tuple[AdapterOperation, ...]
     missing_observations: tuple[ObservationType, ...]
+    required_evidence_sources: tuple[EvidenceSourceKind, ...] = ()
+    missing_evidence_sources: tuple[EvidenceSourceKind, ...] = ()
     blocking_reasons: tuple[BlockingReason, ...]
 
 
@@ -189,9 +198,15 @@ def derive_compatibility(
     missing = required - environment.capabilities
     planned = {item.requirement: item.reason for item in environment.planned_support}
     unplanned = missing - planned.keys()
-    if unplanned:
+    required_evidence = required_evidence_sources_for_scenario(scenario)
+    missing_evidence = missing_evidence_sources_for_scenario(
+        scenario, environment.evidence_sources
+    )
+    if unplanned or missing_evidence:
         status = CompatibilityStatus.UNSUPPORTED
-        reasons: tuple[BlockingReason, ...] = ()
+        reasons: tuple[BlockingReason, ...] = (
+            (BlockingReason.EVIDENCE_SOURCE_UNAVAILABLE,) if missing_evidence else ()
+        )
     elif missing:
         status = CompatibilityStatus.BLOCKED
         reasons = tuple(sorted({planned[item] for item in missing}, key=str))
@@ -229,6 +244,8 @@ def derive_compatibility(
         missing_observations=tuple(
             sorted(required_observations - available_observations, key=str)
         ),
+        required_evidence_sources=tuple(sorted(required_evidence, key=str)),
+        missing_evidence_sources=tuple(sorted(missing_evidence, key=str)),
         blocking_reasons=reasons,
     )
 
