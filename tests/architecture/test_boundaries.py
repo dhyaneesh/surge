@@ -128,6 +128,14 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             {"services/keda-scaler/poll.py": "# import openai is forbidden here\n"}
         )
 
+    def test_guardian_application_imports_model_client(self) -> None:
+        self.assert_rule(
+            {"apps/guardian_api/domain.py": "import openai\n"},
+            "ARCH-GUARDIAN-NO-MODEL-CLIENT",
+            "apps/guardian_api/domain.py",
+            1,
+        )
+
     def test_production_service_imports_signoz_mcp_client(self) -> None:
         self.assert_rule(
             {"services/reasoner/diagnostics.py": "import signoz_mcp.client\n"},

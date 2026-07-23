@@ -2,7 +2,47 @@ schema_version: guardian.requirements-implementation/v1
 
 # Each record links a stable test-obligation ID to a repository-relative test
 # file containing that ID as a marker.
-test_implementations: []
+test_implementations:
+- test_obligation_id: TST-GRD-REA-001-UNIT
+  test_file: tests/unit/test_guardian_domain.py
+- test_obligation_id: TST-GRD-REA-002-UNIT
+  test_file: tests/unit/test_guardian_domain.py
+- test_obligation_id: TST-GRD-REA-003-UNIT
+  test_file: tests/unit/test_guardian_domain.py
+- test_obligation_id: TST-GRD-REA-006-UNIT
+  test_file: tests/unit/test_guardian_domain.py
+- test_obligation_id: TST-GRD-REA-007-UNIT
+  test_file: tests/unit/test_guardian_domain.py
+- test_obligation_id: TST-GRD-CLS-001-UNIT
+  test_file: tests/unit/test_guardian_domain.py
+- test_obligation_id: TST-GRD-CLS-002-UNIT
+  test_file: tests/unit/test_guardian_domain.py
+- test_obligation_id: TST-GRD-CLS-003-UNIT
+  test_file: tests/unit/test_guardian_domain.py
+- test_obligation_id: TST-GRD-CLS-004-UNIT
+  test_file: tests/unit/test_guardian_domain.py
+- test_obligation_id: TST-GRD-CLS-005-UNIT
+  test_file: tests/unit/test_guardian_domain.py
+- test_obligation_id: TST-GRD-CLS-006-UNIT
+  test_file: tests/unit/test_guardian_domain.py
+- test_obligation_id: TST-GRD-ACT-001-UNIT
+  test_file: tests/unit/test_guardian_domain.py
+- test_obligation_id: TST-GRD-ACT-002-UNIT
+  test_file: tests/unit/test_guardian_domain.py
+- test_obligation_id: TST-GRD-ACT-003-UNIT
+  test_file: tests/unit/test_guardian_domain.py
+- test_obligation_id: TST-GRD-ACT-004-UNIT
+  test_file: tests/unit/test_guardian_domain.py
+- test_obligation_id: TST-GRD-ACT-005-UNIT
+  test_file: tests/unit/test_guardian_domain.py
+- test_obligation_id: TST-GRD-TTL-003-UNIT
+  test_file: tests/unit/test_guardian_domain.py
+- test_obligation_id: TST-GRD-TTL-004-UNIT
+  test_file: tests/unit/test_guardian_domain.py
+- test_obligation_id: TST-GRD-TTL-005-UNIT
+  test_file: tests/unit/test_guardian_domain.py
+- test_obligation_id: TST-GRD-TTL-006-UNIT
+  test_file: tests/unit/test_guardian_domain.py
 
 # Demo-required normative items must declare at least one scenario whose
 # compatible environment intersects the requirement's environment mapping.

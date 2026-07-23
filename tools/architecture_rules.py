@@ -279,6 +279,20 @@ def _check_source(
     is_scaler = _is_under(parts, "services", "keda-scaler") or _is_under(
         parts, "services", "keda_scaler"
     )
+    is_guardian_application = _is_under(parts, "apps", "guardian_api") or _is_under(
+        parts, "apps", "guardian-api"
+    )
+    if is_guardian_application:
+        for reference in imports:
+            if _module_matches(reference.module, MODEL_CLIENT_MODULES):
+                _add(
+                    violations,
+                    "ARCH-GUARDIAN-NO-MODEL-CLIENT",
+                    relative,
+                    reference.line,
+                    f"Guardian application imports model client {reference.module!r}",
+                    "Keep classification, eligibility, policy, and action gates deterministic.",
+                )
     for reference in imports:
         if _module_matches(reference.module, MCP_CLIENT_MODULES):
             _add(

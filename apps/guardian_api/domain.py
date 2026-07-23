@@ -1,0 +1,278 @@
+"""Deterministic Guardian incident evaluation."""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+
+from apps.guardian_api.models import (
+    ActionType,
+    CriticalIntegrityFailure,
+    GuardianProjection,
+    HypothesisName,
+    IncidentClass,
+    IncidentFacts,
+    IncidentSeverity,
+    ObservationUpdate,
+    PolicyDecision,
+    PolicyState,
+    ScalerResult,
+    TelemetryFacts,
+    WorkflowState,
+)
+from apps.guardian_api.rules import score_hypotheses
+
+
+ACTION_BY_HYPOTHESIS = {
+    HypothesisName.LOAD_SPIKE: ActionType.SCALE_UP,
+    HypothesisName.DEPLOYMENT_REGRESSION: ActionType.ROLLBACK,
+    HypothesisName.RESOURCE_SATURATION: ActionType.SCALE_UP,
+    HypothesisName.DEPENDENCY_FAILURE: ActionType.PROTECT_DEPENDENCY,
+}
+
+EVIDENCE_GROUPS_BY_HYPOTHESIS = {
+    HypothesisName.LOAD_SPIKE: ("load", "utilization"),
+    HypothesisName.DEPLOYMENT_REGRESSION: ("deployment", "exceptions|latency"),
+    HypothesisName.RESOURCE_SATURATION: ("pressure", "utilization"),
+    HypothesisName.DEPENDENCY_FAILURE: ("dependency", "topology"),
+}
+
+
+def _integrity_failures(
+    telemetry: TelemetryFacts, *, identity_resolved: bool, now: datetime
+) -> tuple[CriticalIntegrityFailure, ...]:
+    failures: list[CriticalIntegrityFailure] = []
+    if not identity_resolved:
+        failures.append(CriticalIntegrityFailure.IDENTITY_MISSING)
+    if telemetry.identity_conflict:
+        failures.append(CriticalIntegrityFailure.IDENTITY_CONFLICT)
+    if now - telemetry.newest_required_sample_at > timedelta(
+        seconds=2 * telemetry.freshness_seconds
+    ):
+        failures.append(CriticalIntegrityFailure.SAMPLE_STALE)
+    if telemetry.timestamp_skew_seconds > 60:
+        failures.append(CriticalIntegrityFailure.TIMESTAMP_SKEW)
+    if telemetry.usable_sample_count == 0:
+        failures.append(CriticalIntegrityFailure.ZERO_SAMPLES)
+    if not telemetry.pipeline_available:
+        failures.append(CriticalIntegrityFailure.PIPELINE_UNAVAILABLE)
+    if not telemetry.comparison_valid:
+        failures.append(CriticalIntegrityFailure.COMPARISON_INVALID)
+    return tuple(failures)
+
+
+def _has_conflict(actions: tuple[ActionType, ...]) -> bool:
+    return len(set(actions)) > 1
+
+
+def _discriminatory_groups(hypotheses: tuple) -> tuple[str, ...]:
+    groups: list[str] = []
+    for hypothesis in sorted(hypotheses, key=lambda item: item.name.value):
+        groups.extend(EVIDENCE_GROUPS_BY_HYPOTHESIS[hypothesis.name])
+    return tuple(dict.fromkeys(groups))
+
+
+def _recovery_verified(
+    facts: IncidentFacts,
+    observation: ObservationUpdate | None,
+    *,
+    now: datetime,
+) -> bool:
+    completed = facts.control.action_completed_at
+    if observation is None or completed is None:
+        return False
+    if (
+        observation.tenant_id != facts.tenant_id
+        or observation.incident_id != facts.incident_id
+        or observation.observed_at <= completed
+        or observation.window_started_at <= completed
+        or observation.telemetry.newest_required_sample_at
+        < observation.window_started_at
+        or observation.observed_at > now
+        or not observation.service_healthy
+        or not observation.required_conditions_satisfied
+    ):
+        return False
+    failures = _integrity_failures(
+        observation.telemetry, identity_resolved=facts.identity is not None, now=now
+    )
+    return observation.telemetry.quality >= 0.80 and not failures
+
+
+def evaluate_incident(
+    facts: IncidentFacts,
+    *,
+    now: datetime,
+    observation: ObservationUpdate | None = None,
+) -> GuardianProjection:
+    """Produce a fail-closed, side-effect-free incident projection."""
+
+    identity_resolved = facts.identity is not None
+    failures = _integrity_failures(
+        facts.telemetry, identity_resolved=identity_resolved, now=now
+    )
+    foreign_evidence = any(
+        item.tenant_id != facts.tenant_id for item in facts.signals.all_evidence()
+    ) or (facts.scaler is not None and facts.scaler.tenant_id != facts.tenant_id)
+    if foreign_evidence and CriticalIntegrityFailure.IDENTITY_CONFLICT not in failures:
+        failures = (*failures, CriticalIntegrityFailure.IDENTITY_CONFLICT)
+    telemetry_healthy = facts.telemetry.quality >= 0.80 and not failures
+    score_input = facts.signals if not foreign_evidence else type(facts.signals)()
+    hypotheses = score_hypotheses(
+        score_input,
+        telemetry_healthy=telemetry_healthy,
+        identity_resolved=identity_resolved and not foreign_evidence,
+    )
+    eligible = tuple(item for item in hypotheses if item.eligible)
+    eligible_actions = tuple(
+        dict.fromkeys(ACTION_BY_HYPOTHESIS[item.name] for item in eligible)
+    )
+    forbidden_actions: list[ActionType] = []
+    proposed_action: ActionType | None = None
+    incident_class: IncidentClass | None = None
+    terminal_reason: str | None = None
+    requested_evidence_groups: tuple[str, ...] = ()
+    escalation_required = False
+    workflow_state = WorkflowState.ASSESSMENT
+    policy_decision = PolicyDecision.DENIED
+
+    if failures or facts.telemetry.quality < 0.80:
+        incident_class = IncidentClass.TELEMETRY_FAILURE
+        workflow_state = WorkflowState.TELEMETRY_FAILURE
+        if foreign_evidence:
+            terminal_reason = "tenant-mismatch"
+        forbidden_actions.extend(
+            (ActionType.SCALE_UP, ActionType.SCALE_DOWN, ActionType.ROLLBACK)
+        )
+    elif foreign_evidence:
+        terminal_reason = "tenant-mismatch"
+    elif eligible:
+        ranked = sorted(
+            eligible,
+            key=lambda item: (-item.deterministic_score, item.name.value),
+        )
+        winner = ranked[0]
+        near_tie = (
+            len(ranked) > 1
+            and winner.deterministic_score - ranked[1].deterministic_score <= 0.03
+        )
+        incident_class = IncidentClass(winner.name.value)
+        workflow_state = WorkflowState.CLASSIFIED
+        if _has_conflict(eligible_actions) or near_tie:
+            workflow_state = WorkflowState.CONFLICT_RESOLUTION
+            requested_evidence_groups = _discriminatory_groups(eligible)
+            conflict_started = facts.evidence_pass.conflict_started_at
+            conflict_budget_exhausted = (
+                facts.evidence_pass.completed_conflict_passes >= 2
+                or conflict_started is not None
+                and now - conflict_started >= timedelta(minutes=10)
+            )
+            if conflict_budget_exhausted:
+                proposed_action = ActionType.CONTINUE_INVESTIGATION
+                terminal_reason = "conflict-unresolved"
+                escalation_required = facts.severity is IncidentSeverity.CRITICAL
+        else:
+            proposed_action = ACTION_BY_HYPOTHESIS[winner.name]
+            policy_decision = PolicyDecision.APPROVAL_REQUIRED
+    elif (
+        facts.evidence_pass.completed_passes >= 2
+        or now - facts.evidence_pass.started_at >= timedelta(minutes=10)
+    ):
+        incident_class = IncidentClass.UNKNOWN
+        workflow_state = WorkflowState.UNKNOWN
+
+    action_time = facts.control.action_attempted_at or now
+    policy_current = (
+        facts.policy.state is PolicyState.FRESH
+        and facts.policy.evaluated_at <= action_time
+        and action_time - facts.policy.evaluated_at <= timedelta(seconds=30)
+    )
+    if proposed_action not in {None, ActionType.CONTINUE_INVESTIGATION}:
+        if not policy_current:
+            proposed_action = None
+            policy_decision = PolicyDecision.DENIED
+            terminal_reason = "policy-unusable"
+
+    proposal_expires_at = None
+    if facts.control.proposal_created_at is not None:
+        proposal_expires_at = facts.control.proposal_created_at + timedelta(
+            seconds=facts.control.proposal_ttl_seconds
+        )
+    approval_expires_at = None
+    if facts.control.approval_issued_at is not None:
+        assert facts.control.approval_expires_at is not None
+        candidates = [
+            facts.control.approval_expires_at,
+            facts.control.approval_issued_at + timedelta(minutes=10),
+        ]
+        if proposal_expires_at is not None:
+            candidates.append(proposal_expires_at)
+        approval_expires_at = min(candidates)
+
+    approval_nonce_expires_at = None
+    if facts.control.approval_nonce_issued_at is not None:
+        assert facts.control.approval_nonce_expires_at is not None
+        approval_nonce_expires_at = min(
+            facts.control.approval_nonce_expires_at,
+            facts.control.approval_nonce_issued_at + timedelta(minutes=5),
+        )
+
+    attempted = action_time
+    expired = (
+        (proposal_expires_at is not None and attempted >= proposal_expires_at)
+        or (approval_expires_at is not None and attempted >= approval_expires_at)
+        or (
+            approval_nonce_expires_at is not None
+            and attempted >= approval_nonce_expires_at
+        )
+    )
+    if expired:
+        proposed_action = None
+        policy_decision = PolicyDecision.DENIED
+        terminal_reason = "approval-expired"
+
+    fingerprints = facts.control
+    if (
+        fingerprints.protected_fingerprint is not None
+        and fingerprints.protected_fingerprint != fingerprints.current_fingerprint
+    ):
+        proposed_action = None
+        policy_decision = PolicyDecision.DENIED
+        terminal_reason = "operator-drift"
+
+    scaler_result = None
+    if facts.scaler is not None:
+        scaler_policy_current = (
+            facts.policy.state is PolicyState.FRESH
+            and facts.policy.evaluated_at <= now
+            and now - facts.policy.evaluated_at <= timedelta(seconds=30)
+        )
+        if (
+            facts.scaler.tenant_id != facts.tenant_id
+            or facts.scaler.source_expires_at <= now
+            or not scaler_policy_current
+        ):
+            scaler_result = ScalerResult.SAFE_HOLD
+            forbidden_actions.append(ActionType.SCALE_DOWN)
+        else:
+            scaler_result = ScalerResult.FRESH_VALUE
+
+    return GuardianProjection(
+        incident_class=incident_class,
+        telemetry_healthy=telemetry_healthy,
+        integrity_failures=failures,
+        hypotheses=hypotheses,
+        eligible_actions=eligible_actions,
+        forbidden_actions=tuple(dict.fromkeys(forbidden_actions)),
+        proposed_action=proposed_action,
+        workflow_state=workflow_state,
+        policy_decision=policy_decision,
+        terminal_reason=terminal_reason,
+        requested_evidence_groups=requested_evidence_groups,
+        proposal_expires_at=proposal_expires_at,
+        approval_expires_at=approval_expires_at,
+        approval_nonce_expires_at=approval_nonce_expires_at,
+        foreign_evidence_rejected=foreign_evidence,
+        scaler_result=scaler_result,
+        recovery_verified=_recovery_verified(facts, observation, now=now),
+        escalation_required=escalation_required,
+    )

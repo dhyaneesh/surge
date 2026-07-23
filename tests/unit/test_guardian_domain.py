@@ -1,0 +1,768 @@
+"""Unit contracts for the deterministic Guardian incident evaluator.
+
+Traceability markers: TST-GRD-REA-001-UNIT, TST-GRD-REA-002-UNIT,
+TST-GRD-REA-003-UNIT, TST-GRD-REA-006-UNIT, TST-GRD-REA-007-UNIT,
+TST-GRD-CLS-001-UNIT, TST-GRD-CLS-002-UNIT, TST-GRD-CLS-003-UNIT,
+TST-GRD-CLS-004-UNIT, TST-GRD-CLS-005-UNIT, TST-GRD-CLS-006-UNIT,
+TST-GRD-ACT-001-UNIT, TST-GRD-ACT-002-UNIT, TST-GRD-ACT-003-UNIT,
+TST-GRD-ACT-004-UNIT, TST-GRD-ACT-005-UNIT, TST-GRD-TTL-003-UNIT,
+TST-GRD-TTL-004-UNIT, TST-GRD-TTL-005-UNIT, TST-GRD-TTL-006-UNIT.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+
+import pytest
+from pydantic import ValidationError
+
+from apps.guardian_api.domain import evaluate_incident
+from apps.guardian_api.models import (
+    ActionType,
+    BooleanEvidence,
+    ControlFacts,
+    CriticalIntegrityFailure,
+    EvidenceFreshness,
+    EvidencePass,
+    EvidenceSource,
+    GuardianProjection,
+    HypothesisName,
+    IncidentClass,
+    IncidentFacts,
+    IncidentSeverity,
+    NumericEvidence,
+    ObservationUpdate,
+    PolicyFacts,
+    PolicyState,
+    ScalerDirection,
+    ScalerFacts,
+    ScalerResult,
+    SignalFacts,
+    TargetIdentity,
+    TelemetryFacts,
+    VersionEvidence,
+    WorkflowState,
+)
+
+
+NOW = datetime(2026, 7, 23, 8, 0, tzinfo=UTC)
+DIGEST_A = "sha256:" + "a" * 64
+DIGEST_B = "sha256:" + "b" * 64
+
+
+def numeric(
+    value: float,
+    *,
+    baseline: float | None = None,
+    group: str = "metric",
+    confidence: float = 1.0,
+    tenant: str = "tenant-a",
+) -> NumericEvidence:
+    return NumericEvidence(
+        tenant_id=tenant,
+        value=value,
+        baseline_value=baseline,
+        observed_at=NOW,
+        freshness=EvidenceFreshness.FRESH,
+        source=EvidenceSource.QUERY_CONTRACT,
+        provenance_ref="query-contract/sample",
+        confidence=confidence,
+        independence_group=group,
+        expected_samples=10,
+        usable_samples=10,
+    )
+
+
+def boolean(
+    value: bool,
+    *,
+    group: str,
+    tenant: str = "tenant-a",
+) -> BooleanEvidence:
+    return BooleanEvidence(
+        tenant_id=tenant,
+        value=value,
+        observed_at=NOW,
+        freshness=EvidenceFreshness.FRESH,
+        source=EvidenceSource.CONTROL_PLANE,
+        provenance_ref=f"control/{group}",
+        confidence=1.0,
+        independence_group=group,
+        expected_samples=10,
+        usable_samples=10,
+    )
+
+
+def version(previous: str = DIGEST_A, current: str = DIGEST_B) -> VersionEvidence:
+    return VersionEvidence(
+        tenant_id="tenant-a",
+        previous_digest=previous,
+        current_digest=current,
+        observed_at=NOW,
+        freshness=EvidenceFreshness.FRESH,
+        source=EvidenceSource.DEPLOYMENT_EVENT,
+        provenance_ref="deployment/revision-2",
+        confidence=1.0,
+        independence_group="deployment",
+        expected_samples=1,
+        usable_samples=1,
+    )
+
+
+def base_facts(**changes: object) -> IncidentFacts:
+    values: dict[str, object] = {
+        "tenant_id": "tenant-a",
+        "incident_id": "incident-1",
+        "observed_at": NOW,
+        "identity": TargetIdentity(
+            environment="production",
+            namespace="payments",
+            workload_kind="Deployment",
+            workload_name="processor",
+            service_name="processor",
+            image_digest=DIGEST_A,
+        ),
+        "telemetry": TelemetryFacts(
+            quality=1.0,
+            newest_required_sample_at=NOW,
+            freshness_seconds=60,
+            timestamp_skew_seconds=0,
+            required_sample_count=10,
+            usable_sample_count=10,
+            pipeline_available=True,
+            comparison_valid=True,
+        ),
+        "evidence_pass": EvidencePass(completed_passes=1, started_at=NOW),
+        "signals": SignalFacts(),
+        "policy": PolicyFacts(state=PolicyState.FRESH, evaluated_at=NOW),
+        "control": ControlFacts(),
+    }
+    values.update(changes)
+    return IncidentFacts.model_validate(values)
+
+
+def score(projection: GuardianProjection, name: HypothesisName):
+    return next(item for item in projection.hypotheses if item.name is name)
+
+
+def test_healthy_elevated_load_has_no_action() -> None:
+    facts = base_facts(
+        signals=SignalFacts(
+            request_rate=numeric(200, baseline=100, group="traffic"),
+            cpu_utilization=numeric(0.50, group="resource"),
+            memory_utilization=numeric(0.55, group="resource"),
+        )
+    )
+    projection = evaluate_incident(facts, now=NOW)
+    assert projection.incident_class is None
+    assert projection.proposed_action is None
+    assert projection.executed_mutations == 0
+    assert score(projection, HypothesisName.LOAD_SPIKE).deterministic_score == 0
+
+
+@pytest.mark.parametrize(
+    ("signals", "expected"),
+    [
+        (
+            SignalFacts(
+                request_rate=numeric(200, baseline=100, group="load"),
+                cpu_utilization=numeric(0.85, group="util"),
+            ),
+            HypothesisName.LOAD_SPIKE,
+        ),
+        (
+            SignalFacts(
+                deployment_version=version(),
+                error_rate=numeric(0.05, baseline=0.01, group="errors"),
+            ),
+            HypothesisName.DEPLOYMENT_REGRESSION,
+        ),
+        (
+            SignalFacts(
+                cpu_utilization=numeric(0.85, group="util"),
+                throttling_ratio=numeric(0.20, group="pressure"),
+            ),
+            HypothesisName.RESOURCE_SATURATION,
+        ),
+        (
+            SignalFacts(
+                topology_edge=boolean(True, group="topology"),
+                dependency_healthy=boolean(False, group="dependency"),
+            ),
+            HypothesisName.DEPENDENCY_FAILURE,
+        ),
+    ],
+)
+def test_supported_hypotheses_are_deterministically_eligible(
+    signals: SignalFacts, expected: HypothesisName
+) -> None:
+    projection = evaluate_incident(base_facts(signals=signals), now=NOW)
+    hypothesis = score(projection, expected)
+    assert hypothesis.eligible
+    assert hypothesis.evidence_confidence >= 0.85
+    assert projection.incident_class == IncidentClass(expected.value)
+    assert projection.executed_mutations == 0
+
+
+def test_independence_group_contributes_only_once() -> None:
+    signals = SignalFacts(
+        cpu_utilization=numeric(0.90, group="same-scrape"),
+        memory_utilization=numeric(0.90, group="same-scrape"),
+        throttling_ratio=numeric(0.20, group="pressure"),
+    )
+    hypothesis = score(
+        evaluate_incident(base_facts(signals=signals), now=NOW),
+        HypothesisName.RESOURCE_SATURATION,
+    )
+    assert hypothesis.support == pytest.approx(0.75)
+    assert hypothesis.deterministic_score == pytest.approx(0.75)
+
+
+@pytest.mark.parametrize(
+    ("signals", "hypothesis", "eligible"),
+    [
+        (
+            SignalFacts(
+                request_rate=numeric(199.9, baseline=100, group="load"),
+                cpu_utilization=numeric(0.85, group="util"),
+            ),
+            HypothesisName.LOAD_SPIKE,
+            False,
+        ),
+        (
+            SignalFacts(
+                request_rate=numeric(200, baseline=100, group="load"),
+                cpu_utilization=numeric(0.85, group="util"),
+            ),
+            HypothesisName.LOAD_SPIKE,
+            True,
+        ),
+        (
+            SignalFacts(
+                deployment_version=version(),
+                p95_latency_ms=numeric(300, baseline=200, group="latency"),
+            ),
+            HypothesisName.DEPLOYMENT_REGRESSION,
+            True,
+        ),
+        (
+            SignalFacts(
+                cpu_utilization=numeric(0.85, group="util"),
+                restart_delta=numeric(1, group="pressure"),
+            ),
+            HypothesisName.RESOURCE_SATURATION,
+            True,
+        ),
+    ],
+)
+def test_rule_threshold_boundaries(
+    signals: SignalFacts, hypothesis: HypothesisName, eligible: bool
+) -> None:
+    result = score(evaluate_incident(base_facts(signals=signals), now=NOW), hypothesis)
+    assert result.eligible is eligible
+
+
+def test_low_group_confidence_blocks_eligibility() -> None:
+    weak_load = numeric(200, baseline=100, group="load", confidence=0.84)
+    facts = base_facts(
+        signals=SignalFacts(
+            request_rate=weak_load,
+            cpu_utilization=numeric(0.85, group="util"),
+        )
+    )
+    hypothesis = score(evaluate_incident(facts, now=NOW), HypothesisName.LOAD_SPIKE)
+    assert hypothesis.deterministic_score == pytest.approx(0.736)
+    assert hypothesis.evidence_confidence == pytest.approx(0.84)
+    assert not hypothesis.eligible
+
+
+@pytest.mark.parametrize(
+    ("changes", "failure"),
+    [
+        ({"identity": None}, CriticalIntegrityFailure.IDENTITY_MISSING),
+        (
+            {
+                "telemetry": TelemetryFacts(
+                    quality=1,
+                    newest_required_sample_at=NOW - timedelta(seconds=121),
+                    freshness_seconds=60,
+                    timestamp_skew_seconds=0,
+                    required_sample_count=10,
+                    usable_sample_count=10,
+                    pipeline_available=True,
+                    comparison_valid=True,
+                )
+            },
+            CriticalIntegrityFailure.SAMPLE_STALE,
+        ),
+        (
+            {
+                "telemetry": TelemetryFacts(
+                    quality=1,
+                    newest_required_sample_at=NOW,
+                    freshness_seconds=60,
+                    timestamp_skew_seconds=61,
+                    required_sample_count=10,
+                    usable_sample_count=10,
+                    pipeline_available=True,
+                    comparison_valid=True,
+                )
+            },
+            CriticalIntegrityFailure.TIMESTAMP_SKEW,
+        ),
+        (
+            {
+                "telemetry": TelemetryFacts(
+                    quality=1,
+                    newest_required_sample_at=NOW,
+                    freshness_seconds=60,
+                    timestamp_skew_seconds=0,
+                    required_sample_count=10,
+                    usable_sample_count=0,
+                    pipeline_available=True,
+                    comparison_valid=True,
+                )
+            },
+            CriticalIntegrityFailure.ZERO_SAMPLES,
+        ),
+    ],
+)
+def test_critical_telemetry_failure_precedes_causal_hypotheses(
+    changes: dict[str, object], failure: CriticalIntegrityFailure
+) -> None:
+    changes["signals"] = SignalFacts(
+        request_rate=numeric(200, baseline=100, group="load"),
+        cpu_utilization=numeric(0.85, group="util"),
+    )
+    projection = evaluate_incident(base_facts(**changes), now=NOW)
+    assert projection.incident_class is IncidentClass.TELEMETRY_FAILURE
+    assert failure in projection.integrity_failures
+    assert projection.proposed_action is None
+
+
+def test_quality_boundary_is_healthy_at_point_eight() -> None:
+    telemetry = base_facts().telemetry.model_copy(update={"quality": 0.80})
+    assert evaluate_incident(base_facts(telemetry=telemetry), now=NOW).telemetry_healthy
+    assert not evaluate_incident(
+        base_facts(telemetry=telemetry.model_copy(update={"quality": 0.799})),
+        now=NOW,
+    ).telemetry_healthy
+
+
+def test_unknown_requires_two_passes_or_ten_minutes() -> None:
+    initial = evaluate_incident(
+        base_facts(
+            evidence_pass=EvidencePass(
+                completed_passes=1, started_at=NOW - timedelta(minutes=9)
+            )
+        ),
+        now=NOW,
+    )
+    assert initial.incident_class is None
+    by_pass = evaluate_incident(
+        base_facts(evidence_pass=EvidencePass(completed_passes=2, started_at=NOW)),
+        now=NOW + timedelta(minutes=1),
+    )
+    by_time = evaluate_incident(
+        base_facts(
+            evidence_pass=EvidencePass(
+                completed_passes=1, started_at=NOW - timedelta(minutes=10)
+            )
+        ),
+        now=NOW,
+    )
+    assert by_pass.incident_class is IncidentClass.UNKNOWN
+    assert by_time.incident_class is IncidentClass.UNKNOWN
+
+
+def test_unhealthy_telemetry_never_becomes_unknown() -> None:
+    telemetry = base_facts().telemetry.model_copy(update={"pipeline_available": False})
+    projection = evaluate_incident(
+        base_facts(
+            telemetry=telemetry,
+            evidence_pass=EvidencePass(completed_passes=2, started_at=NOW),
+        ),
+        now=NOW + timedelta(minutes=10),
+    )
+    assert projection.incident_class is IncidentClass.TELEMETRY_FAILURE
+
+
+def test_mutually_exclusive_actions_enter_conflict_resolution() -> None:
+    signals = SignalFacts(
+        request_rate=numeric(200, baseline=100, group="load"),
+        cpu_utilization=numeric(0.85, group="util"),
+        deployment_version=version(),
+        error_rate=numeric(0.05, baseline=0.01, group="errors"),
+    )
+    projection = evaluate_incident(
+        base_facts(
+            signals=signals,
+            evidence_pass=EvidencePass(
+                completed_passes=1,
+                started_at=NOW,
+                completed_conflict_passes=2,
+                conflict_started_at=NOW - timedelta(minutes=1),
+            ),
+            severity=IncidentSeverity.CRITICAL,
+        ),
+        now=NOW,
+    )
+    assert projection.workflow_state is WorkflowState.CONFLICT_RESOLUTION
+    assert set(projection.eligible_actions) == {
+        ActionType.SCALE_UP,
+        ActionType.ROLLBACK,
+    }
+    assert projection.proposed_action is ActionType.CONTINUE_INVESTIGATION
+    assert projection.executed_mutations == 0
+    assert projection.escalation_required
+
+
+def test_near_tie_without_model_cannot_choose_rollback_over_dependency() -> None:
+    signals = SignalFacts(
+        deployment_version=version(),
+        error_rate=numeric(0.05, baseline=0.01, group="errors", confidence=0.95),
+        topology_edge=boolean(True, group="topology"),
+        dependency_healthy=boolean(False, group="dependency"),
+    )
+    projection = evaluate_incident(base_facts(signals=signals), now=NOW)
+    assert projection.workflow_state is WorkflowState.CONFLICT_RESOLUTION
+    assert projection.proposed_action is None
+
+
+def test_near_tied_same_action_hypotheses_do_not_select_without_model() -> None:
+    signals = SignalFacts(
+        request_rate=numeric(200, baseline=100, group="load", confidence=0.85),
+        cpu_utilization=numeric(0.85, group="util"),
+        throttling_ratio=numeric(0.20, group="pressure", confidence=0.9143),
+    )
+    projection = evaluate_incident(base_facts(signals=signals), now=NOW)
+    assert score(
+        projection, HypothesisName.LOAD_SPIKE
+    ).deterministic_score == pytest.approx(0.74)
+    assert score(
+        projection, HypothesisName.RESOURCE_SATURATION
+    ).deterministic_score == pytest.approx(0.720005)
+    assert projection.workflow_state is WorkflowState.CONFLICT_RESOLUTION
+    assert projection.proposed_action is None
+
+
+def test_conflict_collects_discriminatory_evidence_before_budget_exhaustion() -> None:
+    signals = SignalFacts(
+        request_rate=numeric(200, baseline=100, group="load"),
+        cpu_utilization=numeric(0.85, group="util"),
+        deployment_version=version(),
+        error_rate=numeric(0.05, baseline=0.01, group="errors"),
+    )
+    projection = evaluate_incident(
+        base_facts(
+            signals=signals,
+            evidence_pass=EvidencePass(
+                completed_passes=1,
+                started_at=NOW,
+                completed_conflict_passes=1,
+                conflict_started_at=NOW,
+            ),
+        ),
+        now=NOW,
+    )
+    assert projection.workflow_state is WorkflowState.CONFLICT_RESOLUTION
+    assert projection.proposed_action is None
+    assert projection.terminal_reason is None
+    assert projection.requested_evidence_groups == (
+        "deployment",
+        "exceptions|latency",
+        "load",
+        "utilization",
+    )
+
+
+def test_policy_is_fail_closed_and_must_be_recent() -> None:
+    signals = SignalFacts(
+        request_rate=numeric(200, baseline=100, group="load"),
+        cpu_utilization=numeric(0.85, group="util"),
+    )
+    stale = evaluate_incident(
+        base_facts(
+            signals=signals,
+            policy=PolicyFacts(
+                state=PolicyState.FRESH,
+                evaluated_at=NOW - timedelta(seconds=31),
+            ),
+        ),
+        now=NOW,
+    )
+    unusable = evaluate_incident(
+        base_facts(
+            signals=signals,
+            policy=PolicyFacts(state=PolicyState.FAIL_CLOSED, evaluated_at=NOW),
+        ),
+        now=NOW,
+    )
+    assert stale.proposed_action is None
+    assert stale.terminal_reason == "policy-unusable"
+    assert unusable.proposed_action is None
+
+
+def test_policy_is_rechecked_against_execution_start() -> None:
+    projection = evaluate_incident(
+        base_facts(
+            signals=SignalFacts(
+                request_rate=numeric(200, baseline=100, group="load"),
+                cpu_utilization=numeric(0.85, group="util"),
+            ),
+            control=ControlFacts(action_attempted_at=NOW + timedelta(seconds=31)),
+        ),
+        now=NOW,
+    )
+    assert projection.proposed_action is None
+    assert projection.terminal_reason == "policy-unusable"
+
+
+def test_proposal_and_approval_expiry_cannot_be_revived() -> None:
+    signals = SignalFacts(
+        request_rate=numeric(200, baseline=100, group="load"),
+        cpu_utilization=numeric(0.85, group="util"),
+    )
+    control = ControlFacts(
+        proposal_created_at=NOW,
+        proposal_ttl_seconds=900,
+        approval_issued_at=NOW + timedelta(minutes=8),
+        approval_expires_at=NOW + timedelta(minutes=30),
+        action_attempted_at=NOW + timedelta(minutes=16),
+    )
+    projection = evaluate_incident(
+        base_facts(signals=signals, control=control),
+        now=NOW + timedelta(minutes=16),
+    )
+    assert projection.proposal_expires_at == NOW + timedelta(minutes=15)
+    assert projection.approval_expires_at == NOW + timedelta(minutes=15)
+    assert projection.proposed_action is None
+    assert projection.terminal_reason == "approval-expired"
+    with pytest.raises(ValidationError):
+        ControlFacts(proposal_ttl_seconds=1801)
+
+
+def test_approval_nonce_is_valid_for_at_most_five_minutes() -> None:
+    projection = evaluate_incident(
+        base_facts(
+            signals=SignalFacts(
+                request_rate=numeric(200, baseline=100, group="load"),
+                cpu_utilization=numeric(0.85, group="util"),
+            ),
+            control=ControlFacts(
+                proposal_created_at=NOW,
+                approval_issued_at=NOW,
+                approval_expires_at=NOW + timedelta(minutes=10),
+                approval_nonce_issued_at=NOW,
+                approval_nonce_expires_at=NOW + timedelta(minutes=10),
+                action_attempted_at=NOW + timedelta(minutes=6),
+            ),
+        ),
+        now=NOW + timedelta(minutes=6),
+    )
+    assert projection.approval_nonce_expires_at == NOW + timedelta(minutes=5)
+    assert projection.proposed_action is None
+    assert projection.terminal_reason == "approval-expired"
+
+
+def test_operator_drift_denies_stale_proposal() -> None:
+    signals = SignalFacts(
+        deployment_version=version(),
+        error_rate=numeric(0.05, baseline=0.01, group="errors"),
+    )
+    projection = evaluate_incident(
+        base_facts(
+            signals=signals,
+            control=ControlFacts(
+                protected_fingerprint="before",
+                current_fingerprint="after",
+            ),
+        ),
+        now=NOW,
+    )
+    assert projection.proposed_action is None
+    assert projection.terminal_reason == "operator-drift"
+
+
+def test_foreign_tenant_evidence_is_rejected_before_scoring() -> None:
+    signals = SignalFacts(
+        request_rate=numeric(
+            200, baseline=100, group="foreign-load", tenant="tenant-b"
+        ),
+        cpu_utilization=numeric(0.85, group="util"),
+    )
+    projection = evaluate_incident(base_facts(signals=signals), now=NOW)
+    assert projection.foreign_evidence_rejected
+    assert projection.terminal_reason == "tenant-mismatch"
+    assert projection.incident_class is IncidentClass.TELEMETRY_FAILURE
+    assert CriticalIntegrityFailure.IDENTITY_CONFLICT in projection.integrity_failures
+    assert not projection.telemetry_healthy
+    assert all(not item.eligible for item in projection.hypotheses)
+
+
+def test_stale_scaler_source_returns_safe_hold() -> None:
+    projection = evaluate_incident(
+        base_facts(
+            scaler=ScalerFacts(
+                tenant_id="tenant-a",
+                source_value=0,
+                source_expires_at=NOW - timedelta(seconds=1),
+                requested_direction=ScalerDirection.DOWN,
+            )
+        ),
+        now=NOW,
+    )
+    assert projection.scaler_result is ScalerResult.SAFE_HOLD
+    assert ActionType.SCALE_DOWN in projection.forbidden_actions
+
+
+def test_scaler_source_fails_closed_when_policy_is_not_fresh() -> None:
+    projection = evaluate_incident(
+        base_facts(
+            policy=PolicyFacts(state=PolicyState.RESTRICTED, evaluated_at=NOW),
+            scaler=ScalerFacts(
+                tenant_id="tenant-a",
+                source_value=3,
+                source_expires_at=NOW + timedelta(minutes=1),
+                requested_direction=ScalerDirection.DOWN,
+            ),
+        ),
+        now=NOW,
+    )
+    assert projection.scaler_result is ScalerResult.SAFE_HOLD
+    assert ActionType.SCALE_DOWN in projection.forbidden_actions
+
+
+def test_scaler_policy_freshness_is_evaluated_at_poll_time() -> None:
+    poll_time = NOW + timedelta(hours=1)
+    telemetry = base_facts().telemetry.model_copy(
+        update={"newest_required_sample_at": poll_time}
+    )
+    projection = evaluate_incident(
+        base_facts(
+            telemetry=telemetry,
+            control=ControlFacts(action_attempted_at=NOW),
+            scaler=ScalerFacts(
+                tenant_id="tenant-a",
+                source_value=3,
+                source_expires_at=poll_time + timedelta(minutes=1),
+                requested_direction=ScalerDirection.DOWN,
+            ),
+        ),
+        now=poll_time,
+    )
+    assert projection.scaler_result is ScalerResult.SAFE_HOLD
+
+
+def test_foreign_scaler_facts_are_rejected() -> None:
+    projection = evaluate_incident(
+        base_facts(
+            scaler=ScalerFacts(
+                tenant_id="tenant-b",
+                source_value=3,
+                source_expires_at=NOW + timedelta(minutes=1),
+                requested_direction=ScalerDirection.UP,
+            )
+        ),
+        now=NOW,
+    )
+    assert projection.scaler_result is ScalerResult.SAFE_HOLD
+    assert projection.foreign_evidence_rejected
+
+
+def test_fresh_later_observation_can_verify_recovery() -> None:
+    facts = base_facts(
+        control=ControlFacts(action_completed_at=NOW - timedelta(minutes=1))
+    )
+    update = ObservationUpdate(
+        tenant_id="tenant-a",
+        incident_id="incident-1",
+        observed_at=NOW,
+        window_started_at=NOW - timedelta(seconds=30),
+        telemetry=base_facts().telemetry,
+        service_healthy=True,
+        required_conditions_satisfied=True,
+        provenance_ref="recovery/window-2",
+    )
+    assert evaluate_incident(facts, now=NOW, observation=update).recovery_verified
+    stale = update.model_copy(update={"observed_at": NOW - timedelta(minutes=2)})
+    assert not evaluate_incident(facts, now=NOW, observation=stale).recovery_verified
+
+    repackaged = update.model_copy(
+        update={
+            "telemetry": update.telemetry.model_copy(
+                update={"newest_required_sample_at": NOW - timedelta(minutes=2)}
+            )
+        }
+    )
+    assert not evaluate_incident(
+        facts, now=NOW, observation=repackaged
+    ).recovery_verified
+
+
+def test_one_independence_group_contributes_to_only_one_polarity() -> None:
+    projection = evaluate_incident(
+        base_facts(
+            signals=SignalFacts(
+                request_rate=numeric(200, baseline=100, group="shared"),
+                cpu_utilization=numeric(0.50, group="shared"),
+            )
+        ),
+        now=NOW,
+    )
+    hypothesis = score(projection, HypothesisName.LOAD_SPIKE)
+    assert hypothesis.support == pytest.approx(0.4)
+    assert hypothesis.contradiction == 0
+
+
+def test_models_reject_scenario_fields_naive_time_and_mutable_identity() -> None:
+    payload = base_facts().model_dump()
+    payload["scenario_id"] = "expected-load-spike"
+    with pytest.raises(ValidationError):
+        IncidentFacts.model_validate(payload)
+    payload = base_facts().model_dump()
+    payload["expected_result"] = "rollback"
+    with pytest.raises(ValidationError):
+        IncidentFacts.model_validate(payload)
+    with pytest.raises(ValidationError):
+        base_facts(observed_at=datetime(2026, 7, 23, 8, 0))
+    with pytest.raises(ValidationError):
+        TargetIdentity(
+            environment="production",
+            namespace="payments",
+            workload_kind="Deployment",
+            workload_name="processor",
+            service_name="processor",
+            image_digest="processor:latest",
+        )
+    evidence_payload = numeric(1).model_dump()
+    evidence_payload["value"] = "1"
+    with pytest.raises(ValidationError):
+        NumericEvidence.model_validate(evidence_payload)
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ["provenance_ref", "confidence", "independence_group"],
+)
+def test_evidence_requires_provenance_confidence_and_independence(
+    missing: str,
+) -> None:
+    payload = numeric(1).model_dump()
+    del payload[missing]
+    with pytest.raises(ValidationError):
+        NumericEvidence.model_validate(payload)
+
+
+def test_model_never_authorizes_or_executes_mutations() -> None:
+    projection = evaluate_incident(
+        base_facts(
+            signals=SignalFacts(
+                request_rate=numeric(200, baseline=100, group="load"),
+                cpu_utilization=numeric(0.85, group="util"),
+            )
+        ),
+        now=NOW,
+    )
+    assert projection.model_participated is False
+    assert projection.executed_mutations == 0
