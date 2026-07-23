@@ -167,7 +167,6 @@ def test_manifest_targets_declare_dependencies_and_capabilities() -> None:
         "test:action-controller",
         "test:integration",
         "test:keda-scaler",
-        "test:matrix",
         "test:policy",
         "test:reasoner",
         "test:replay",
@@ -395,11 +394,9 @@ def test_environment_guard_accepts_only_registered_environment_ids() -> None:
 
     for environment in registered:
         result = run_environment(environment)
-        assert result.returncode == 3
+        assert result.returncode == 2
         assert result.stdout == ""
-        assert result.stderr == (
-            f"[baseline] test:env: no tests are configured ({environment})\n"
-        )
+        assert result.stderr.startswith("[prerequisite] test:env:")
 
     script = (ROOT / "scripts/test-environment.sh").read_text(encoding="utf-8")
     case_allowlist = re.search(r'case "\$1" in\n\s+([^\n]+)\)', script)
@@ -417,7 +414,7 @@ def test_environment_guard_rejects_missing_unknown_and_extra_arguments() -> None
         assert result.stderr.startswith("[usage] test:env:")
 
 
-def test_task_environment_wiring_validates_ids_before_reporting_baseline(
+def test_task_environment_wiring_validates_ids_before_running_scenarios(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "scripts").mkdir()
@@ -441,10 +438,8 @@ exec python3 "$@"
 
     assert unknown.returncode == 64
     assert unknown.stderr == "[usage] test:env: unknown environment ID: unknown\n"
-    assert supported.returncode == 3
-    assert supported.stderr == (
-        "[baseline] test:env: no tests are configured (otel-demo)\n"
-    )
+    assert supported.returncode == 2
+    assert supported.stderr.startswith("[prerequisite] test:env:")
 
 
 def test_matrix_classifier_short_circuit_does_not_run_environment_script(
@@ -502,18 +497,12 @@ targets:
     assert not sentinel.exists()
 
 
-def test_taskfile_matrix_runs_aggregate_preflight_before_environment_children() -> None:
+def test_taskfile_matrix_runs_preflight_before_matrix_entrypoint() -> None:
     commands = load_yaml(ROOT / "Taskfile.yml")["tasks"]["test:matrix"]["cmds"]
 
     assert isinstance(commands[0], str)
-    assert "{{.PREFLIGHT}} aggregate test:matrix" == commands[0]
-    assert all(
-        isinstance(command, dict) and command.get("task") == "test:env"
-        for command in commands[1:]
-    )
-    assert [command["vars"]["ENV"] for command in commands[1:]] == load_yaml(
-        MANIFEST_PATH
-    )["registered_environments"]
+    assert "{{.PREFLIGHT}} test:matrix" == commands[0]
+    assert commands[1] == "./scripts/test-matrix.sh"
 
 
 def task_command_text(command: object) -> str:
@@ -536,7 +525,7 @@ def test_taskfile_uses_local_uv_and_preflights_before_work() -> None:
             continue
         commands = task["cmds"]
         first = task_command_text(commands[0])
-        operation = "aggregate " if name in {"final", "test:matrix"} else ""
+        operation = "aggregate " if name == "final" else ""
         assert f"{{{{.PREFLIGHT}}}} {operation}{name}" in first, name
         for command in commands:
             text = task_command_text(command)
@@ -571,7 +560,7 @@ def test_format_requires_explicit_files_and_never_formats_the_repository() -> No
 def test_aggregate_children_match_manifest_and_follow_preflight() -> None:
     taskfile = load_yaml(ROOT / "Taskfile.yml")["tasks"]
     manifest = load_yaml(MANIFEST_PATH)["targets"]
-    for name in ("final", "test:matrix"):
+    for name in ("final",):
         commands = taskfile[name]["cmds"]
         children = [command["task"] for command in commands[1:]]
         assert children == manifest[name]["children"]

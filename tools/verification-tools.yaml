@@ -74,7 +74,7 @@ capabilities:
   test:action-controller: {availability: baseline, reason: no tests are configured}
   test:requirements: {availability: active}
   test:env: {availability: active}
-  test:matrix: {availability: baseline, reason: no tests are configured}
+  test:matrix: {availability: active}
   requirements:render: {availability: active}
   requirements:check: {availability: active}
   final: {availability: active}
@@ -118,10 +118,7 @@ targets:
   test:action-controller: {dependencies: [], capabilities: [test:action-controller]}
   test:requirements: {dependencies: [task, uv], capabilities: [test:requirements]}
   test:env: {dependencies: [], capabilities: [test:env]}
-  test:matrix:
-    dependencies: []
-    capabilities: [test:matrix]
-    children: [test:env, test:env, test:env, test:env, test:env]
+  test:matrix: {dependencies: [uv], capabilities: [test:matrix]}
   requirements:render: {dependencies: [task, uv], capabilities: [requirements:render]}
   requirements:check: {dependencies: [task, uv], capabilities: [requirements:check]}
   final:

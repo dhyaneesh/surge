@@ -39,7 +39,6 @@ scenarios:
         status: unsupported
         missingCapabilities:
         - multi-tenant-fixture
-        - workflow-observation
         requiredAdapterOperations:
         - emit-incident
         - observe-state
@@ -52,7 +51,6 @@ scenarios:
         - emit-incident
         missingObservations:
         - tenant-rejection
-        - workflow-state
         blockingReasons: []
       online-boutique:
         status: unsupported
@@ -134,7 +132,6 @@ scenarios:
         missingCapabilities:
         - dependency-observation
         - fault-injection
-        - workflow-observation
         requiredAdapterOperations:
         - inject-fault
         - observe-state
@@ -150,7 +147,6 @@ scenarios:
         - inject-fault
         missingObservations:
         - dependency-topology
-        - workflow-state
         blockingReasons: []
       online-boutique:
         status: supported
@@ -234,7 +230,6 @@ scenarios:
         - deployment-transition
         - progressive-delivery
         - recovery-observation
-        - workflow-observation
         requiredAdapterOperations:
         - deploy-version
         - observe-state
@@ -251,7 +246,6 @@ scenarios:
         missingObservations:
         - deployment-version
         - recovery-evidence
-        - workflow-state
         blockingReasons: []
       online-boutique:
         status: unsupported
@@ -352,7 +346,6 @@ scenarios:
         - deployment-transition
         - progressive-delivery
         - recovery-observation
-        - workflow-observation
         requiredAdapterOperations:
         - deploy-version
         - observe-state
@@ -371,7 +364,6 @@ scenarios:
         - dependency-topology
         - deployment-version
         - recovery-evidence
-        - workflow-state
         blockingReasons: []
       online-boutique:
         status: unsupported
@@ -457,7 +449,6 @@ scenarios:
         status: unsupported
         missingCapabilities:
         - incident-ingress-control
-        - workflow-observation
         requiredAdapterOperations:
         - emit-incident
         - observe-state
@@ -467,8 +458,7 @@ scenarios:
         - workflow-state
         missingAdapterOperations:
         - emit-incident
-        missingObservations:
-        - workflow-state
+        missingObservations: []
         blockingReasons: []
       online-boutique:
         status: unsupported
@@ -536,7 +526,6 @@ scenarios:
         status: unsupported
         missingCapabilities:
         - approval-control
-        - workflow-observation
         requiredAdapterOperations:
         - control-approval
         - observe-state
@@ -546,8 +535,7 @@ scenarios:
         - workflow-state
         missingAdapterOperations:
         - control-approval
-        missingObservations:
-        - workflow-state
+        missingObservations: []
         blockingReasons: []
       online-boutique:
         status: unsupported
@@ -617,9 +605,8 @@ scenarios:
         missingObservations: []
         blockingReasons: []
       keda-rabbitmq:
-        status: unsupported
-        missingCapabilities:
-        - workflow-observation
+        status: supported
+        missingCapabilities: []
         requiredAdapterOperations:
         - apply-load
         - observe-state
@@ -631,8 +618,7 @@ scenarios:
         - workflow-state
         - workload-state
         missingAdapterOperations: []
-        missingObservations:
-        - workflow-state
+        missingObservations: []
         blockingReasons: []
       online-boutique:
         status: supported
@@ -709,7 +695,6 @@ scenarios:
         status: unsupported
         missingCapabilities:
         - ambiguous-symptom
-        - workflow-observation
         requiredAdapterOperations:
         - inject-fault
         - observe-state
@@ -724,7 +709,6 @@ scenarios:
         - inject-fault
         missingObservations:
         - telemetry-quality
-        - workflow-state
         blockingReasons: []
       online-boutique:
         status: unsupported
@@ -814,7 +798,6 @@ scenarios:
         missingCapabilities:
         - dependency-observation
         - recovery-observation
-        - workflow-observation
         requiredAdapterOperations:
         - apply-load
         - observe-state
@@ -831,7 +814,6 @@ scenarios:
         missingObservations:
         - dependency-topology
         - recovery-evidence
-        - workflow-state
         blockingReasons: []
       online-boutique:
         status: unsupported
@@ -914,7 +896,6 @@ scenarios:
         status: unsupported
         missingCapabilities:
         - manual-workload-mutation
-        - workflow-observation
         requiredAdapterOperations:
         - mutate-workload
         - observe-state
@@ -925,8 +906,7 @@ scenarios:
         - workload-state
         missingAdapterOperations:
         - mutate-workload
-        missingObservations:
-        - workflow-state
+        missingObservations: []
         blockingReasons: []
       online-boutique:
         status: unsupported
@@ -1014,7 +994,6 @@ scenarios:
         - dependency-observation
         - recovery-observation
         - resource-pressure
-        - workflow-observation
         requiredAdapterOperations:
         - inject-fault
         - observe-state
@@ -1032,7 +1011,6 @@ scenarios:
         missingObservations:
         - dependency-topology
         - recovery-evidence
-        - workflow-state
         blockingReasons: []
       online-boutique:
         status: unsupported
@@ -1135,7 +1113,6 @@ scenarios:
         - deployment-transition
         - progressive-delivery
         - recovery-observation
-        - workflow-observation
         requiredAdapterOperations:
         - apply-load
         - deploy-version
@@ -1154,7 +1131,6 @@ scenarios:
         missingObservations:
         - deployment-version
         - recovery-evidence
-        - workflow-state
         blockingReasons: []
       online-boutique:
         status: unsupported
@@ -1248,7 +1224,6 @@ scenarios:
         status: unsupported
         missingCapabilities:
         - policy-bundle-control
-        - workflow-observation
         requiredAdapterOperations:
         - control-policy-bundle
         - observe-state
@@ -1261,7 +1236,6 @@ scenarios:
         - control-policy-bundle
         missingObservations:
         - policy-state
-        - workflow-state
         blockingReasons: []
       online-boutique:
         status: unsupported
@@ -1445,7 +1419,6 @@ scenarios:
         missingCapabilities:
         - recovery-observation
         - telemetry-interruption
-        - workflow-observation
         requiredAdapterOperations:
         - interrupt-telemetry
         - observe-state
@@ -1462,7 +1435,6 @@ scenarios:
         missingObservations:
         - recovery-evidence
         - telemetry-quality
-        - workflow-state
         blockingReasons: []
       online-boutique:
         status: unsupported

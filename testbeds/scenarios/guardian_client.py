@@ -20,12 +20,17 @@ class GuardianSnapshot(StrictModel):
     incident_class: str | None = None
     actionable: bool
     telemetry_quality: str | None = None
-    evidence: tuple[dict[str, Any], ...] = ()
+    supporting_evidence: tuple[dict[str, Any], ...] = ()
+    contradicting_evidence: tuple[dict[str, Any], ...] = ()
+    required_fresh_evidence: tuple[dict[str, Any], ...] = ()
     eligible_actions: tuple[dict[str, Any], ...] = ()
     forbidden_actions: tuple[dict[str, Any], ...] = ()
     proposed_action: dict[str, Any] | None = None
     policy_decision: str
     policy_fail_closed: bool
+    policy_bundle_state: str | None = None
+    permitted_operations: tuple[str, ...] = ()
+    forbidden_operations: tuple[str, ...] = ()
     workflow_states: tuple[str, ...]
     terminal_reason: str | None = None
     parent_count: int = Field(ge=0)
@@ -35,7 +40,10 @@ class GuardianSnapshot(StrictModel):
     mutations: tuple[dict[str, Any], ...] = ()
     audit_event_counts: dict[str, int] = Field(default_factory=dict)
     tenant_isolation: dict[str, bool] | None = None
+    safety_gates: tuple[str, ...] = ()
     scaler_result: str | None = None
+    scaler_fabricated_zero: bool = False
+    scaler_scale_down_permitted: bool = False
     recovery_state: str | None = None
 
 

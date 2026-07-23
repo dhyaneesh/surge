@@ -53,6 +53,7 @@ ENVIRONMENT_DECLARATIONS = {
         "horizontal-scaling",
         "scale-to-zero",
         "scaler-observation",
+        "workflow-observation",
         "mutation-observation",
     ),
 }

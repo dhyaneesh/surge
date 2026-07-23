@@ -18,5 +18,33 @@ case "$1" in
     ;;
 esac
 
-printf '[baseline] test:env: no tests are configured (%s)\n' "$1" >&2
-exit 3
+environment=$1
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+if [ -z "${GUARDIAN_BASE_URL:-}" ]; then
+  printf '%s\n' '[prerequisite] test:env: GUARDIAN_BASE_URL is required' >&2
+  exit 2
+fi
+
+for command in kubectl helm curl; do
+  if ! command -v "$command" >/dev/null 2>&1; then
+    printf '[prerequisite] test:env: required command is unavailable: %s\n' "$command" >&2
+    exit 2
+  fi
+done
+
+if ! kubectl cluster-info >/dev/null 2>&1; then
+  printf '%s\n' '[prerequisite] test:env: Kubernetes cluster access is unavailable' >&2
+  exit 2
+fi
+
+if ! curl --fail --silent --show-error "${GUARDIAN_BASE_URL%/}/health" >/dev/null; then
+  printf '[prerequisite] test:env: Guardian health endpoint is unavailable: %s\n' "$GUARDIAN_BASE_URL" >&2
+  exit 2
+fi
+
+artifact_root=${GUARDIAN_SCENARIO_ARTIFACT_ROOT:-"$root/artifacts/environments/$environment"}
+exec "$root/.tools/bin/uv" run --locked python -m testbeds.scenarios.environment_suite \
+  --environment "$environment" \
+  --guardian-url "$GUARDIAN_BASE_URL" \
+  --artifacts "$artifact_root"

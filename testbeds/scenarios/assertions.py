@@ -60,6 +60,80 @@ def evaluate_assertions(
         )
     add("policy.decision", expected.policy.decision.value, snapshot.policy_decision)
     add("policy.fail_closed", expected.policy.fail_closed, snapshot.policy_fail_closed)
+    if expected.policy.bundle_state is not None:
+        add(
+            "policy.bundle_state",
+            expected.policy.bundle_state.value,
+            snapshot.policy_bundle_state,
+        )
+    add(
+        "policy.permitted_operations",
+        [item.value for item in expected.policy.permitted_operations],
+        list(snapshot.permitted_operations),
+        all(
+            item.value in snapshot.permitted_operations
+            for item in expected.policy.permitted_operations
+        ),
+    )
+    add(
+        "policy.forbidden_operations",
+        [item.value for item in expected.policy.forbidden_operations],
+        list(snapshot.forbidden_operations),
+        all(
+            item.value in snapshot.forbidden_operations
+            for item in expected.policy.forbidden_operations
+        ),
+    )
+    for name, wanted, actual in (
+        (
+            "evidence.supporting",
+            expected.evidence.supporting,
+            snapshot.supporting_evidence,
+        ),
+        (
+            "evidence.contradicting",
+            expected.evidence.contradicting,
+            snapshot.contradicting_evidence,
+        ),
+        (
+            "evidence.required_fresh",
+            expected.evidence.required_fresh,
+            snapshot.required_fresh_evidence,
+        ),
+    ):
+        rendered = [
+            item.model_dump(mode="json", by_alias=True, exclude_none=True)
+            for item in wanted
+        ]
+        add(name, rendered, list(actual), all(item in actual for item in rendered))
+    eligible = [
+        item.model_dump(mode="json", by_alias=True, exclude_none=True)
+        for item in expected.actions.eligible
+    ]
+    forbidden = [
+        item.model_dump(mode="json", by_alias=True, exclude_none=True)
+        for item in expected.actions.forbidden
+    ]
+    proposed = (
+        expected.actions.proposed.model_dump(
+            mode="json", by_alias=True, exclude_none=True
+        )
+        if expected.actions.proposed
+        else None
+    )
+    add(
+        "actions.eligible",
+        eligible,
+        list(snapshot.eligible_actions),
+        all(item in snapshot.eligible_actions for item in eligible),
+    )
+    add(
+        "actions.forbidden",
+        forbidden,
+        list(snapshot.forbidden_actions),
+        all(item in snapshot.forbidden_actions for item in forbidden),
+    )
+    add("actions.proposed", proposed, snapshot.proposed_action)
     add(
         "workflow.required_states",
         [item.value for item in expected.workflow.required_states],
@@ -108,8 +182,39 @@ def evaluate_assertions(
             actual,
             _cardinality(actual, event.count),
         )
+    mutation_actions = [
+        item.model_dump(mode="json", by_alias=True, exclude_none=True)
+        for item in expected.mutations.actions
+    ]
+    add(
+        "mutations.actions",
+        mutation_actions,
+        list(snapshot.mutations),
+        all(item in snapshot.mutations for item in mutation_actions),
+    )
+    add(
+        "safety_gates",
+        [item.value for item in expected.safety_gates],
+        list(snapshot.safety_gates),
+        all(item.value in snapshot.safety_gates for item in expected.safety_gates),
+    )
+    if expected.tenant_isolation is not None:
+        wanted_tenant = expected.tenant_isolation.model_dump(mode="json", by_alias=True)
+        add("tenant_isolation", wanted_tenant, snapshot.tenant_isolation)
     if expected.scaler is not None:
         add("scaler.result", expected.scaler.result.value, snapshot.scaler_result)
+        if expected.scaler.fabricated_zero_forbidden:
+            add(
+                "scaler.fabricated_zero_forbidden",
+                False,
+                snapshot.scaler_fabricated_zero,
+            )
+        if expected.scaler.scale_down_forbidden:
+            add(
+                "scaler.scale_down_forbidden",
+                False,
+                snapshot.scaler_scale_down_permitted,
+            )
     if expected.recovery is not None:
         add(
             "recovery.state",

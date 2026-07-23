@@ -42,6 +42,7 @@ class ExecutionStatus(StrEnum):
 
 
 class ExecutionState(StrEnum):
+    PENDING = "pending"
     VALIDATING = "validating"
     INSTALLING = "installing"
     AWAITING_BASELINE = "awaiting-baseline"
@@ -50,6 +51,9 @@ class ExecutionState(StrEnum):
     DEPLOYING_VERSION = "deploying-version"
     SUBMITTING_INCIDENT = "submitting-incident"
     AWAITING_GUARDIAN = "awaiting-guardian"
+    AWAITING_APPROVAL = "awaiting-approval"
+    EXECUTING_ACTION = "executing-action"
+    VERIFYING_RECOVERY = "verifying-recovery"
     RESETTING = "resetting"
     CLEANING_UP = "cleaning-up"
     PASSED = "passed"
@@ -134,13 +138,33 @@ class ScenarioExecutor:
         def transition(state: ExecutionState) -> None:
             transitions.append(StateTransition(state))
 
+        transition(ExecutionState.PENDING)
         transition(ExecutionState.VALIDATING)
+        writer.write(
+            "execution-metadata.json",
+            {
+                "schemaVersion": "guardian.scenario-execution/v1",
+                "executionId": execution_id,
+                "scenarioId": scenario.metadata.name,
+            },
+        )
         writer.write("scenario.json", scenario)
         writer.write("capabilities.json", compatibility)
         writer.write("environment-release.json", registration.release)
+        writer.write(
+            "environment-identity.json",
+            {
+                "environment": registration.environment,
+                "release": registration.release,
+                "roles": registration.role_bindings,
+            },
+        )
         observations = []
-        stimulus_artifacts = []
+        load_artifacts = []
+        fault_artifacts = []
+        deployment_artifacts = []
         guardian_artifacts = []
+        incident_payloads = []
         try:
             if settings.install_environment:
                 transition(ExecutionState.INSTALLING)
@@ -161,7 +185,7 @@ class ScenarioExecutor:
             if stimulus.load is not None:
                 transition(ExecutionState.APPLYING_LOAD)
                 users = {2: 10, 4: 25}.get(round(stimulus.load.multiplier), 10)
-                stimulus_artifacts.append(
+                load_artifacts.append(
                     await bounded(registration.adapter.apply_load(LoadProfile(users)))
                 )
                 observations.append(await bounded(registration.adapter.observe_state()))
@@ -171,7 +195,7 @@ class ScenarioExecutor:
                     stimulus.fault.fault_type,
                     self._bound_role(scenario, registration),
                 )
-                stimulus_artifacts.append(
+                fault_artifacts.append(
                     await bounded(
                         registration.adapter.inject_fault(
                             FaultSpecification(
@@ -194,7 +218,7 @@ class ScenarioExecutor:
                         f"no immutable deployment binding for {stimulus.deployment.to_version!r}"
                     ) from exc
                 role = self._bound_role(scenario, registration)
-                stimulus_artifacts.append(
+                deployment_artifacts.append(
                     await bounded(
                         registration.adapter.deploy_version(
                             DeploymentSpecification(
@@ -214,6 +238,7 @@ class ScenarioExecutor:
                 "stimulus": stimulus.model_dump(mode="json", by_alias=True),
             }
             transition(ExecutionState.SUBMITTING_INCIDENT)
+            incident_payloads.append(incident_payload)
             delivery_count = (
                 stimulus.incident_delivery.count if stimulus.incident_delivery else 1
             )
@@ -253,8 +278,22 @@ class ScenarioExecutor:
             )
         finally:
             writer.write("observations.json", observations)
-            writer.write("stimulus-results.json", stimulus_artifacts)
+            writer.write("load-results.json", load_artifacts)
+            writer.write("fault-results.json", fault_artifacts)
+            writer.write("deployment-results.json", deployment_artifacts)
+            writer.write("incident-payloads.json", incident_payloads)
             writer.write("guardian.json", guardian_artifacts)
+            writer.write(
+                "diagnostics.json",
+                {
+                    "observations": observations,
+                    "operationalError": (
+                        f"{type(operational_error).__name__}: {operational_error}"
+                        if operational_error
+                        else None
+                    ),
+                },
+            )
             if installed:
                 try:
                     transition(ExecutionState.RESETTING)
@@ -264,6 +303,7 @@ class ScenarioExecutor:
                             settings.baseline_timeout
                         )
                     )
+                    transition(ExecutionState.VERIFYING_RECOVERY)
                     writer.write("reset.json", {"restored": restored})
                 except Exception as exc:
                     operational_error = operational_error or exc

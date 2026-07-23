@@ -99,8 +99,8 @@ tasks:
     desc: Run all environment-neutral scenario contract checks
     cmds:
       - "{{.PREFLIGHT}} test:scenarios"
-      - "{{.UV}} run --locked --no-sync python -m tools.verification_harness suite test:scenarios tests/unit/test_guardian_scenario_schema.py tests/unit/test_guardian_scenario_v1alpha2.py tests/unit/test_guardian_scenario_upgrade.py tests/unit/test_critical_scenario_pack.py tests/unit/test_scenario_compatibility.py tests/unit/test_scenario_catalog.py tests/contract/test_environment_capability_declarations.py tests/architecture"
-      - "{{.UV}} run --locked pytest tests/unit/test_guardian_scenario_schema.py tests/unit/test_guardian_scenario_v1alpha2.py tests/unit/test_guardian_scenario_upgrade.py tests/unit/test_critical_scenario_pack.py tests/unit/test_scenario_compatibility.py tests/unit/test_scenario_catalog.py tests/contract/test_environment_capability_declarations.py tests/architecture"
+      - "{{.UV}} run --locked --no-sync python -m tools.verification_harness suite test:scenarios tests/unit/test_guardian_scenario_schema.py tests/unit/test_guardian_scenario_v1alpha2.py tests/unit/test_guardian_scenario_upgrade.py tests/unit/test_critical_scenario_pack.py tests/unit/test_scenario_compatibility.py tests/unit/test_scenario_catalog.py tests/unit/test_scenario_execution.py tests/unit/test_scenario_matrix.py tests/contract/test_environment_capability_declarations.py tests/contract/test_scenario_execution_contract.py tests/architecture"
+      - "{{.UV}} run --locked pytest tests/unit/test_guardian_scenario_schema.py tests/unit/test_guardian_scenario_v1alpha2.py tests/unit/test_guardian_scenario_upgrade.py tests/unit/test_critical_scenario_pack.py tests/unit/test_scenario_compatibility.py tests/unit/test_scenario_catalog.py tests/unit/test_scenario_execution.py tests/unit/test_scenario_matrix.py tests/contract/test_environment_capability_declarations.py tests/contract/test_scenario_execution_contract.py tests/architecture"
 
   test:testbeds-unit:
     cmds:
@@ -157,17 +157,8 @@ tasks:
 
   test:matrix:
     cmds:
-      - "{{.PREFLIGHT}} aggregate test:matrix"
-      - task: test:env
-        vars: {ENV: otel-demo}
-      - task: test:env
-        vars: {ENV: aws-retail}
-      - task: test:env
-        vars: {ENV: online-boutique}
-      - task: test:env
-        vars: {ENV: argo-rollouts}
-      - task: test:env
-        vars: {ENV: keda-rabbitmq}
+      - "{{.PREFLIGHT}} test:matrix"
+      - ./scripts/test-matrix.sh
 
   requirements:render:
     desc: Regenerate requirement coverage and dependency graph

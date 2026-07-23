@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from testbeds.scenarios.loader import load_guardian_scenario
+from testbeds.scenarios.environment_suite import select_scenarios
 from testbeds.scenarios.registry import (
     SUPPORTED_ENVIRONMENTS,
     build_adapter_registration,
@@ -37,6 +38,12 @@ def test_all_v1alpha2_scenarios_have_unique_ids_and_registered_environments(tmp_
 def test_unknown_environment_is_rejected_before_adapter_construction(tmp_path):
     with pytest.raises(ValueError, match="unknown environment"):
         build_adapter_registration("unknown", workspace=tmp_path)
+
+
+def test_every_environment_selects_at_least_one_executable_scenario():
+    for environment in SUPPORTED_ENVIRONMENTS:
+        selected, _ = select_scenarios(environment, Path("testbeds/scenarios"))
+        assert selected, f"{environment} selected no executable scenarios"
 
 
 def test_v1alpha1_remains_explicitly_non_executable():

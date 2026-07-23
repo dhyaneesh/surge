@@ -93,6 +93,18 @@ def passing_snapshot():
         incident_class=None,
         actionable=False,
         telemetry_quality="healthy",
+        supporting_evidence=(
+            {
+                "evidenceType": "metrics",
+                "subjectRole": "request-processor",
+                "tenantRelation": "same-tenant",
+                "freshness": "fresh",
+            },
+        ),
+        forbidden_actions=(
+            {"actionType": "scale", "scaleDirection": "any"},
+            {"actionType": "rollback"},
+        ),
         policy_decision="denied",
         policy_fail_closed=True,
         workflow_states=("active", "assessment", "closed"),
@@ -156,6 +168,15 @@ def test_executor_orders_lifecycle_and_persists_redacted_artifacts(tmp_path):
     )
     assert "secret-value" not in artifacts
     assert "[REDACTED]" in artifacts
+    assert {
+        "execution-metadata.json",
+        "environment-identity.json",
+        "load-results.json",
+        "fault-results.json",
+        "deployment-results.json",
+        "incident-payloads.json",
+        "diagnostics.json",
+    } <= {path.name for path in result.artifact_directory.glob("*.json")}
 
 
 def test_failed_assertion_returns_failed_status_and_still_resets_and_cleans(tmp_path):
