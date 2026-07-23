@@ -12,10 +12,12 @@ from pydantic import ValidationError
 
 from apps.guardian_api.models import (
     ControlFacts,
+    CriticalIntegrityFailure,
     EvidenceFreshness,
     EvidencePass,
     EvidenceSource,
     IncidentFacts,
+    IncidentClass,
     IncidentSeverity,
     NumericEvidence,
     ObservationUpdate,
@@ -188,6 +190,83 @@ def test_service_rejects_invalid_authenticated_tenant_identifier() -> None:
     service = GuardianService(InMemoryIncidentStore())
     with pytest.raises(ValueError, match="authenticated tenant"):
         service.get_incident("tenant/a", "incident-1")
+
+
+def test_create_and_append_reject_naive_operation_times_without_persistence() -> None:
+    store = InMemoryIncidentStore()
+    service = GuardianService(store)
+    naive_now = NOW.replace(tzinfo=None)
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        service.submit_incident("tenant-a", "request-1", facts(), now=naive_now)
+    assert store.snapshot().incidents == ()
+
+    created = service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        service.append_observation(
+            "tenant-a",
+            "incident-1",
+            observation(observed_at=NOW + timedelta(minutes=1)),
+            now=naive_now,
+        )
+    assert service.get_incident("tenant-a", "incident-1") == created
+
+
+def test_delayed_submission_evaluates_stale_facts_at_operation_time() -> None:
+    operation_time = NOW + timedelta(minutes=10)
+    snapshot = GuardianService(InMemoryIncidentStore()).submit_incident(
+        "tenant-a", "request-1", facts(), now=operation_time
+    )
+
+    assert snapshot.evaluation_times == (operation_time,)
+    assert snapshot.projection.incident_class is IncidentClass.TELEMETRY_FAILURE
+    assert (
+        CriticalIntegrityFailure.SAMPLE_STALE in snapshot.projection.integrity_failures
+    )
+
+
+def test_delayed_observation_is_stale_at_append_operation_time() -> None:
+    service = GuardianService(InMemoryIncidentStore())
+    incident_facts = facts(
+        control=ControlFacts(action_completed_at=NOW - timedelta(minutes=1))
+    )
+    service.submit_incident("tenant-a", "request-1", incident_facts, now=NOW)
+    stale_observation = observation(
+        observed_at=NOW + timedelta(minutes=1), healthy=True
+    )
+    operation_time = NOW + timedelta(minutes=10)
+
+    snapshot = service.append_observation(
+        "tenant-a", "incident-1", stale_observation, now=operation_time
+    )
+
+    assert snapshot.evaluation_times == (NOW, operation_time)
+    assert not snapshot.projection.recovery_verified
+    assert (
+        CriticalIntegrityFailure.SAMPLE_STALE in snapshot.projection.integrity_failures
+    )
+
+
+def test_policy_freshness_is_evaluated_at_submission_operation_time() -> None:
+    incident_facts = facts().model_copy(
+        update={
+            "signals": SignalFacts(
+                request_rate=numeric_evidence(200.0, baseline=100.0, group="load"),
+                cpu_utilization=numeric_evidence(
+                    0.85, baseline=None, group="utilization"
+                ),
+            )
+        }
+    )
+    operation_time = NOW + timedelta(seconds=31)
+
+    snapshot = GuardianService(InMemoryIncidentStore()).submit_incident(
+        "tenant-a", "request-1", incident_facts, now=operation_time
+    )
+
+    assert snapshot.evaluation_times == (operation_time,)
+    assert snapshot.projection.proposed_action is None
+    assert snapshot.projection.terminal_reason == "policy-unusable"
 
 
 def test_concurrent_duplicate_submissions_create_one_incident_and_workflow() -> None:
@@ -525,9 +604,12 @@ def test_conflicting_window_is_fail_closed_and_arrival_order_independent() -> No
     healthy_only, healthy_first = run(healthy, unhealthy)
     unhealthy_only, unhealthy_first = run(unhealthy, healthy)
 
-    assert canonical_incident_snapshot(healthy_first) == canonical_incident_snapshot(
+    assert healthy_first.observations != unhealthy_first.observations
+    assert canonical_incident_snapshot(healthy_first) != canonical_incident_snapshot(
         unhealthy_first
     )
+    assert healthy_first.observation_conflicts == unhealthy_first.observation_conflicts
+    assert healthy_first.projection == unhealthy_first.projection
     assert len(healthy_first.observation_conflicts) == 1
     assert healthy_first.projection.terminal_reason == "observation-conflict"
     assert not healthy_first.projection.telemetry_healthy
@@ -535,9 +617,9 @@ def test_conflicting_window_is_fail_closed_and_arrival_order_independent() -> No
     assert healthy_first.projection.proposed_action is None
     assert not healthy_first.projection.eligible_actions
     assert healthy_first.evaluation_times == (
-        incident_facts.observed_at,
-        healthy.observed_at,
-        unhealthy.observed_at,
+        NOW,
+        NOW + timedelta(minutes=1),
+        NOW + timedelta(minutes=2),
     )
     assert unhealthy_first.evaluation_times == healthy_first.evaluation_times
     assert healthy_first.projection_history[: len(healthy_only.projection_history)] == (
@@ -564,14 +646,12 @@ def test_conflicting_window_makes_every_hypothesis_ineligible() -> None:
     unhealthy = observation(observed_at=NOW + timedelta(minutes=1), healthy=False)
     service = GuardianService(InMemoryIncidentStore())
 
-    initial = service.submit_incident(
-        "tenant-a", "request-1", incident_facts, now=NOW + timedelta(minutes=4)
-    )
+    initial = service.submit_incident("tenant-a", "request-1", incident_facts, now=NOW)
     service.append_observation(
-        "tenant-a", "incident-1", healthy, now=NOW + timedelta(minutes=5)
+        "tenant-a", "incident-1", healthy, now=NOW + timedelta(minutes=1)
     )
     conflicted = service.append_observation(
-        "tenant-a", "incident-1", unhealthy, now=NOW + timedelta(minutes=6)
+        "tenant-a", "incident-1", unhealthy, now=NOW + timedelta(minutes=2)
     )
 
     assert any(item.eligible for item in initial.projection.hypotheses)
@@ -616,7 +696,8 @@ def test_concurrent_conflicting_window_matches_canonical_fail_closed_state() -> 
         tuple(executor.map(append, (healthy, unhealthy)))
 
     actual = service.get_incident("tenant-a", "incident-1")
-    assert canonical_incident_snapshot(actual) == canonical_incident_snapshot(expected)
+    assert actual.observation_conflicts == expected.observation_conflicts
+    assert actual.projection == expected.projection
     assert actual.projection.terminal_reason == "observation-conflict"
 
 
@@ -627,7 +708,7 @@ def test_observations_are_append_only_and_reevaluate_history_deterministically()
         observed_at=NOW + timedelta(minutes=1), healthy=False
     )
     second_observation = observation(
-        observed_at=NOW + timedelta(minutes=2),
+        observed_at=NOW + timedelta(minutes=1, seconds=50),
         observation_id="observation-2",
         sequence=2,
         window_key="window-2",
@@ -643,19 +724,19 @@ def test_observations_are_append_only_and_reevaluate_history_deterministically()
             "tenant-a",
             "request-1",
             incident_facts,
-            now=NOW + timedelta(minutes=4),
+            now=NOW + timedelta(seconds=10),
         )
         first = service.append_observation(
             "tenant-a",
             "incident-1",
             first_observation,
-            now=NOW + timedelta(minutes=5),
+            now=NOW + timedelta(minutes=1, seconds=10),
         )
         second = service.append_observation(
             "tenant-a",
             "incident-1",
             second_observation,
-            now=NOW + timedelta(minutes=6),
+            now=NOW + timedelta(minutes=1, seconds=55),
         )
         return initial, first, second
 
@@ -665,14 +746,15 @@ def test_observations_are_append_only_and_reevaluate_history_deterministically()
     assert initial.observations == ()
     assert first.observations == (first_observation,)
     assert second.observations == (first_observation, second_observation)
-    assert initial.evaluation_times == (incident_facts.observed_at,)
+    assert initial.evaluation_times == (NOW + timedelta(seconds=10),)
     assert first.evaluation_times == (
-        incident_facts.observed_at,
-        first_observation.observed_at,
+        NOW + timedelta(seconds=10),
+        NOW + timedelta(minutes=1, seconds=10),
     )
     assert second.evaluation_times[: len(first.evaluation_times)] == (
         first.evaluation_times
     )
+    assert second.evaluation_times[-1] == NOW + timedelta(minutes=1, seconds=55)
     assert second.projection_history[: len(first.projection_history)] == (
         first.projection_history
     )

@@ -123,6 +123,14 @@ ProjectionReplayer = Callable[
 ]
 
 
+def _validated_operation_time(value: datetime) -> datetime:
+    if not isinstance(value, datetime):
+        raise TypeError("operation time must be a datetime")
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("operation time must be timezone-aware")
+    return value
+
+
 def _canonical_value(value: Any) -> Any:
     if isinstance(value, BaseModel):
         return _canonical_value(value.model_dump(mode="python"))
@@ -174,32 +182,11 @@ def incident_facts_hash(facts: IncidentFacts) -> str:
 
 
 def canonical_incident_snapshot(snapshot: IncidentSnapshot) -> str:
-    """Serialize a complete incident record for deterministic replay comparison."""
+    """Serialize the complete persisted incident audit record."""
 
     if not isinstance(snapshot, IncidentSnapshot):
         raise TypeError("snapshot must be a validated IncidentSnapshot")
-    observations = tuple(sorted(snapshot.observations, key=_observation_sort_key))
-    conflicts = _observation_conflicts(observations)
-    evaluation_times = (
-        snapshot.facts.observed_at,
-        *(observation.observed_at for observation in observations),
-    )
-    projection_history = replay_incident_history(
-        snapshot.facts,
-        observations,
-        evaluation_times,
-        conflicts,
-    )
-    canonical_snapshot = snapshot.model_copy(
-        update={
-            "observations": observations,
-            "observation_conflicts": conflicts,
-            "evaluation_times": evaluation_times,
-            "projection_history": projection_history,
-            "projection": projection_history[-1],
-        }
-    )
-    return canonical_json(canonical_snapshot)
+    return canonical_json(snapshot)
 
 
 def _observation_identity(observation: ObservationUpdate) -> tuple[str, str, int]:
@@ -207,16 +194,6 @@ def _observation_identity(observation: ObservationUpdate) -> tuple[str, str, int
         observation.observation_id,
         observation.window_key,
         observation.sequence,
-    )
-
-
-def _observation_sort_key(observation: ObservationUpdate) -> tuple[Any, ...]:
-    return (
-        observation.observed_at,
-        observation.sequence,
-        observation.window_key,
-        observation.observation_id,
-        canonical_json(observation),
     )
 
 
@@ -388,6 +365,7 @@ class InMemoryIncidentStore:
     ) -> IncidentSnapshot:
         """Atomically claim a key and create or return its incident."""
 
+        now = _validated_operation_time(now)
         if facts.tenant_id != authenticated_tenant:
             raise IncidentInvariantError("facts tenant must match authenticated tenant")
         idempotency_identity = (authenticated_tenant, idempotency_key)
@@ -410,7 +388,7 @@ class InMemoryIncidentStore:
                     )
                 stored = existing
             else:
-                evaluation_times = (facts.observed_at,)
+                evaluation_times = (now,)
                 projection_history = self._project(facts, (), evaluation_times, ())
                 stored = IncidentSnapshot(
                     tenant_id=authenticated_tenant,
@@ -442,6 +420,7 @@ class InMemoryIncidentStore:
     ) -> IncidentSnapshot:
         """Append one ordered observation and atomically replay complete history."""
 
+        now = _validated_operation_time(now)
         identity = (authenticated_tenant, incident_id)
         with self._write_transaction():
             current = self._incidents.get(identity)
@@ -469,7 +448,7 @@ class InMemoryIncidentStore:
             conflicts = _observation_conflicts(observations)
             evaluation_times = (
                 *current.evaluation_times,
-                observation.observed_at,
+                now,
             )
             replayed_history = self._project(
                 current.facts, observations, evaluation_times, conflicts
