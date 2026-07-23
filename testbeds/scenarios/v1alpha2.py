@@ -243,6 +243,12 @@ class CardinalityExpectation(StrictModel):
             raise ValueError("cardinality requires exactly one bound")
         return self
 
+    @property
+    def lower_bound(self) -> int:
+        if self.exact is not None:
+            return self.exact
+        return self.at_least or 0
+
 
 class IncidentExpectation(StrictModel):
     incident_class: IncidentClass | None = None
@@ -293,12 +299,7 @@ class MutationExpectation(StrictModel):
 
     @model_validator(mode="after")
     def positive_cardinality_requires_allowed_action(self) -> Self:
-        lower_bound = (
-            self.count.exact
-            if self.count.exact is not None
-            else self.count.at_least or 0
-        )
-        if lower_bound > 0 and not self.allowed_actions:
+        if self.count.lower_bound > 0 and not self.allowed_actions:
             raise ValueError("positive mutation cardinality requires an allowed action")
         return self
 

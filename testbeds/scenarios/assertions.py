@@ -28,12 +28,6 @@ def _cardinality(value: int, expected: CardinalityExpectation) -> bool:
     return value >= expected.at_least
 
 
-def _cardinality_lower_bound(expected: CardinalityExpectation) -> int:
-    if expected.exact is not None:
-        return expected.exact
-    return expected.at_least or 0
-
-
 def evaluate_assertions(
     scenario: GuardianScenarioV1Alpha2, snapshot: GuardianSnapshot
 ) -> tuple[AssertionResult, ...]:
@@ -198,18 +192,11 @@ def evaluate_assertions(
         for item in expected.mutations.allowed_actions
     ]
     executed_mutations = list(snapshot.executed_mutations)
-    allowed_actions_occurred = all(
-        item in snapshot.executed_mutations for item in allowed_mutation_actions
-    )
     add(
         "mutations.actions",
         allowed_mutation_actions,
         executed_mutations,
-        all(item in allowed_mutation_actions for item in executed_mutations)
-        and (
-            _cardinality_lower_bound(expected.mutations.count) == 0
-            or allowed_actions_occurred
-        ),
+        all(item in allowed_mutation_actions for item in executed_mutations),
     )
     add(
         "safety_gates",

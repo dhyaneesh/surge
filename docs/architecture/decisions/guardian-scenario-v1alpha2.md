@@ -313,9 +313,10 @@ compatibility. It contains no independently authored semantic values.
 9. Mutation allowed-action assertions are a subset of eligible actions with
    exact direction agreement. They constrain executed mutations; they do not
    require execution when the cardinality lower bound is zero. Every executed
-   mutation must be in the allowed set. When the lower bound is positive, the
-   allowed action must occur. A proposed scale-up cannot be satisfied by an
-   executed scale-down. Zero mutations may not declare a target.
+   mutation must be in the allowed set. When the lower bound is positive, at
+   least one allowed action must occur; alternative allowed actions need not all
+   execute. A proposed scale-up cannot be satisfied by an executed scale-down.
+   Zero mutations may not declare a target.
 10. Non-actionable incidents require zero mutations and no proposed mutating
     action.
 11. `telemetry_failure` forbids scale and rollback, requires unusable telemetry
@@ -438,7 +439,7 @@ Environment declarations are the source of compatibility facts. Adapter
 protocol conformance tests verify declarations against implementations; an
 adapter class is not introspected during pure derivation.
 
-An exact positive mutation cardinality implicitly requires
+A positive mutation cardinality lower bound implicitly requires
 `action-controller-execution` during preflight. A runtime that does not declare
 that capability is unsupported for the scenario even when it can observe
 mutations. This derived requirement is a test-harness compatibility fact; it
@@ -456,9 +457,10 @@ Evaluation always checks mutation cardinality, requires the reported count to
 equal the number of executed mutation records, and rejects every executed
 mutation outside the allowed set. An `atMost: 1` contract therefore accepts
 zero executions. Exact-positive and positive-lower-bound contracts additionally
-require an allowed action and require it to appear. The minimal runtime is
-recommendation-only, reports no executed mutations, and cannot preflight an
-exact-positive mutation contract.
+require a non-empty allowed set, but they do not require every allowed
+alternative to execute. The minimal runtime is recommendation-only, reports no
+executed mutations, and cannot preflight a positive-lower-bound mutation
+contract.
 
 ## Preflight contract
 

@@ -119,10 +119,13 @@ def passing_snapshot():
     )
 
 
-def mutation_assertions(*, count, executed_mutations, exact=None):
+def mutation_assertions(*, count, executed_mutations, exact=None, allowed_actions=None):
     value = copy.deepcopy(document())
     if exact is not None:
         value["spec"]["expected"]["mutations"]["count"] = {"exact": exact}
+    if allowed_actions is not None:
+        value["spec"]["expected"]["actions"]["eligible"] = allowed_actions
+        value["spec"]["expected"]["mutations"]["actions"] = allowed_actions
     scenario = GuardianScenarioV1Alpha2.model_validate(value)
     snapshot = passing_snapshot().model_copy(
         update={"mutation_count": count, "executed_mutations": executed_mutations}
@@ -151,11 +154,10 @@ def test_at_most_one_mutation_rejects_an_unexpected_executed_action():
     assert not results["mutations.actions"].passed
 
 
-def test_exact_positive_mutation_requires_the_expected_executed_action():
+def test_exact_positive_mutation_rejects_a_missing_execution():
     results = mutation_assertions(count=1, executed_mutations=(), exact=1)
 
     assert not results["mutations.count"].passed
-    assert not results["mutations.actions"].passed
 
 
 def test_mutation_count_must_match_executed_mutations():
@@ -165,6 +167,20 @@ def test_mutation_count_must_match_executed_mutations():
     )
 
     assert not results["mutations.count"].passed
+    assert results["mutations.actions"].passed
+
+
+def test_one_execution_may_match_one_of_multiple_allowed_actions():
+    scale_up = {"actionType": "scale", "scaleDirection": "up"}
+    scale_down = {"actionType": "scale", "scaleDirection": "down"}
+    results = mutation_assertions(
+        count=1,
+        executed_mutations=(scale_up,),
+        exact=1,
+        allowed_actions=[scale_up, scale_down],
+    )
+
+    assert results["mutations.count"].passed
     assert results["mutations.actions"].passed
 
 
