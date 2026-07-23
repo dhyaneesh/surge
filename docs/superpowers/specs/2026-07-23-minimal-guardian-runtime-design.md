@@ -64,7 +64,7 @@ Unknown, missing, stale, or conflicting facts deny mutation. The core returns a 
 - `POST /v1/incidents/{incident_id}/observations` for a later authenticated observation window;
 - `GET /v1/incidents/{incident_id}/scenario-snapshot` with mandatory matching bearer identity.
 
-For this local runtime, an environment-supplied token map resolves opaque bearer tokens to tenant IDs; the request cannot assert its own tenant. Malformed payloads return 400, missing or invalid authentication returns 401, tenant mismatch returns 403 before incident lookup or evaluation, absent incidents return 404, and idempotency conflicts return 409. Responses never contain secrets or credentials. The `scenario-snapshot` route is explicitly a test-observation projection, not a normative production endpoint.
+For this local runtime, an environment-supplied token map resolves opaque bearer tokens to tenant IDs; the request cannot assert its own tenant. Malformed payloads return 400, missing or invalid authentication returns 401, an explicit foreign-tenant evidence reference returns 403 before evaluation, an opaque incident lookup outside the authenticated tenant returns a non-disclosing 404, and idempotency conflicts return 409. Responses never contain secrets or credentials. The `scenario-snapshot` route is explicitly a test-observation projection, not a normative production endpoint.
 
 ### Scenario ingestion
 
