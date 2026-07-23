@@ -132,6 +132,10 @@ CAPABILITY_CONTRACTS: dict[
         (AdapterOperation.INJECT_FAULT,),
         (ObservationType.TELEMETRY,),
     ),
+    EnvironmentCapability.ACTION_CONTROLLER_EXECUTION: (
+        (),
+        (ObservationType.MUTATION,),
+    ),
 }
 
 
@@ -178,7 +182,10 @@ class ScenarioPreflightResult(StrictModel):
 def derive_compatibility(
     scenario: GuardianScenarioV1Alpha2, environment: EnvironmentDeclaration
 ) -> ScenarioPreflightResult:
-    required = scenario.spec.environment_requirements.capabilities
+    required = set(scenario.spec.environment_requirements.capabilities)
+    mutation_count = scenario.spec.expected.mutations.count
+    if mutation_count.exact is not None and mutation_count.exact > 0:
+        required.add(EnvironmentCapability.ACTION_CONTROLLER_EXECUTION)
     missing = required - environment.capabilities
     planned = {item.requirement: item.reason for item in environment.planned_support}
     unplanned = missing - planned.keys()

@@ -58,12 +58,16 @@ design_capabilities:
   - testbeds/scenarios/upgrade.py
   - testbeds/scenarios/compatibility.py
   - testbeds/scenarios/catalog.py
+  - testbeds/scenarios/assertions.py
+  - testbeds/scenarios/guardian_client.py
+  - testbeds/scenarios/matrix.py
   - testbeds/environments/capabilities.py
   tests:
   - tests/unit/test_guardian_scenario_v1alpha2.py
   - tests/unit/test_guardian_scenario_upgrade.py
   - tests/unit/test_scenario_compatibility.py
   - tests/unit/test_scenario_catalog.py
+  - tests/unit/test_scenario_execution.py
   - tests/unit/test_critical_scenario_pack.py
   - tests/contract/test_environment_capability_declarations.py
   status: implemented

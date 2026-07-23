@@ -46,6 +46,7 @@ class EnvironmentCapability(StrEnum):
     SCALER_OBSERVATION = "scaler-observation"
     INCIDENT_INGRESS_CONTROL = "incident-ingress-control"
     AMBIGUOUS_SYMPTOM = "ambiguous-symptom"
+    ACTION_CONTROLLER_EXECUTION = "action-controller-execution"
 
 
 class ScaleDirection(StrEnum):
@@ -287,8 +288,19 @@ class WorkflowExpectation(StrictModel):
 
 class MutationExpectation(StrictModel):
     count: CardinalityExpectation
-    actions: tuple[ActionAssertion, ...] = ()
+    allowed_actions: tuple[ActionAssertion, ...] = Field(default=(), alias="actions")
     target: ScenarioTarget | None = None
+
+    @model_validator(mode="after")
+    def positive_cardinality_requires_allowed_action(self) -> Self:
+        lower_bound = (
+            self.count.exact
+            if self.count.exact is not None
+            else self.count.at_least or 0
+        )
+        if lower_bound > 0 and not self.allowed_actions:
+            raise ValueError("positive mutation cardinality requires an allowed action")
+        return self
 
 
 class AuditEventExpectation(StrictModel):
@@ -374,9 +386,11 @@ class ExpectedOutcomeV1Alpha2(StrictModel):
             self.actions.proposed == item for item in self.actions.eligible
         ):
             raise ValueError("proposed action must be eligible")
-        if any(item not in self.actions.eligible for item in self.mutations.actions):
-            raise ValueError("observed mutation must exactly match an eligible action")
-        mutating = bool(self.mutations.actions) or (
+        if any(
+            item not in self.actions.eligible for item in self.mutations.allowed_actions
+        ):
+            raise ValueError("allowed mutation must exactly match an eligible action")
+        mutating = bool(self.mutations.allowed_actions) or (
             self.actions.proposed is not None
             and self.actions.proposed.action_type
             in {ActionType.SCALE, ActionType.ROLLBACK}

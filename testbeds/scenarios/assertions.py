@@ -28,6 +28,12 @@ def _cardinality(value: int, expected: CardinalityExpectation) -> bool:
     return value >= expected.at_least
 
 
+def _cardinality_lower_bound(expected: CardinalityExpectation) -> int:
+    if expected.exact is not None:
+        return expected.exact
+    return expected.at_least or 0
+
+
 def evaluate_assertions(
     scenario: GuardianScenarioV1Alpha2, snapshot: GuardianSnapshot
 ) -> tuple[AssertionResult, ...]:
@@ -161,11 +167,16 @@ def evaluate_assertions(
         ),
         ("mutations.count", snapshot.mutation_count, expected.mutations.count),
     ):
+        cardinality_passed = _cardinality(actual, cardinality)
+        if name == "mutations.count":
+            cardinality_passed = cardinality_passed and actual == len(
+                snapshot.executed_mutations
+            )
         add(
             name,
             cardinality.model_dump(mode="json", by_alias=True),
             actual,
-            _cardinality(actual, cardinality),
+            cardinality_passed,
         )
     add(
         "workflow.terminal_reason",
@@ -182,15 +193,23 @@ def evaluate_assertions(
             actual,
             _cardinality(actual, event.count),
         )
-    mutation_actions = [
+    allowed_mutation_actions = [
         item.model_dump(mode="json", by_alias=True, exclude_none=True)
-        for item in expected.mutations.actions
+        for item in expected.mutations.allowed_actions
     ]
+    executed_mutations = list(snapshot.executed_mutations)
+    allowed_actions_occurred = all(
+        item in snapshot.executed_mutations for item in allowed_mutation_actions
+    )
     add(
         "mutations.actions",
-        mutation_actions,
-        list(snapshot.mutations),
-        all(item in snapshot.mutations for item in mutation_actions),
+        allowed_mutation_actions,
+        executed_mutations,
+        all(item in allowed_mutation_actions for item in executed_mutations)
+        and (
+            _cardinality_lower_bound(expected.mutations.count) == 0
+            or allowed_actions_occurred
+        ),
     )
     add(
         "safety_gates",

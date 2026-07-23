@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 from datetime import timedelta
 
@@ -12,6 +13,7 @@ from testbeds.models import (
     EnvironmentState,
     LoadExecution,
 )
+from testbeds.scenarios.assertions import evaluate_assertions
 from testbeds.scenarios.execution import (
     AdapterRegistration,
     ExecutionSettings,
@@ -22,6 +24,7 @@ from testbeds.scenarios.execution import (
 from testbeds.scenarios.guardian_client import GuardianSnapshot, ScriptedGuardianClient
 from testbeds.scenarios.loader import load_guardian_scenario
 from testbeds.scenarios.v1alpha2 import EnvironmentCapability, GuardianScenarioV1Alpha2
+from tests.unit.test_guardian_scenario_v1alpha2 import document
 
 
 class RecordingAdapter:
@@ -114,6 +117,72 @@ def passing_snapshot():
         mutation_count=0,
         audit_event_counts={"observation-recorded": 1},
     )
+
+
+def mutation_assertions(*, count, executed_mutations, exact=None):
+    value = copy.deepcopy(document())
+    if exact is not None:
+        value["spec"]["expected"]["mutations"]["count"] = {"exact": exact}
+    scenario = GuardianScenarioV1Alpha2.model_validate(value)
+    snapshot = passing_snapshot().model_copy(
+        update={"mutation_count": count, "executed_mutations": executed_mutations}
+    )
+    return {
+        result.name: result
+        for result in evaluate_assertions(scenario, snapshot)
+        if result.name.startswith("mutations.")
+    }
+
+
+def test_at_most_one_mutation_accepts_zero_executed_actions():
+    results = mutation_assertions(count=0, executed_mutations=())
+
+    assert results["mutations.count"].passed
+    assert results["mutations.actions"].passed
+
+
+def test_at_most_one_mutation_rejects_an_unexpected_executed_action():
+    results = mutation_assertions(
+        count=1,
+        executed_mutations=({"actionType": "rollback"},),
+    )
+
+    assert results["mutations.count"].passed
+    assert not results["mutations.actions"].passed
+
+
+def test_exact_positive_mutation_requires_the_expected_executed_action():
+    results = mutation_assertions(count=1, executed_mutations=(), exact=1)
+
+    assert not results["mutations.count"].passed
+    assert not results["mutations.actions"].passed
+
+
+def test_mutation_count_must_match_executed_mutations():
+    results = mutation_assertions(
+        count=0,
+        executed_mutations=({"actionType": "scale", "scaleDirection": "up"},),
+    )
+
+    assert not results["mutations.count"].passed
+    assert results["mutations.actions"].passed
+
+
+def test_guardian_snapshot_preserves_mutations_as_wire_alias():
+    snapshot = GuardianSnapshot.model_validate(
+        {
+            **passing_snapshot().model_dump(mode="json", by_alias=True),
+            "mutationCount": 1,
+            "mutations": [{"actionType": "scale", "scaleDirection": "up"}],
+        }
+    )
+
+    assert snapshot.executed_mutations == (
+        {"actionType": "scale", "scaleDirection": "up"},
+    )
+    assert snapshot.model_dump(mode="json", by_alias=True)["mutations"] == [
+        {"actionType": "scale", "scaleDirection": "up"}
+    ]
 
 
 def test_executor_rejects_capability_mismatch_before_install(tmp_path):

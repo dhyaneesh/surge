@@ -37,7 +37,9 @@ class GuardianSnapshot(StrictModel):
     proposal_count: int = Field(ge=0)
     approval_count: int = Field(ge=0)
     mutation_count: int = Field(ge=0)
-    mutations: tuple[dict[str, Any], ...] = ()
+    executed_mutations: tuple[dict[str, Any], ...] = Field(
+        default=(), alias="mutations"
+    )
     audit_event_counts: dict[str, int] = Field(default_factory=dict)
     tenant_isolation: dict[str, bool] | None = None
     safety_gates: tuple[str, ...] = ()
