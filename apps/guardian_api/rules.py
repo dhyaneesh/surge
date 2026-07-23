@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from enum import StrEnum
 
 from apps.guardian_api.models import (
-    EvidenceBase,
+    EvidenceFact,
     EvidenceFreshness,
     HypothesisName,
     HypothesisScore,
@@ -52,13 +53,20 @@ HYPOTHESIS_GROUPS: dict[HypothesisName, tuple[frozenset[str], ...]] = {
 }
 
 
-def _fresh(evidence: EvidenceBase | None) -> bool:
-    return evidence is not None and evidence.freshness is EvidenceFreshness.FRESH
+def _fresh(
+    evidence: EvidenceFact | None, *, now: datetime, freshness_seconds: int
+) -> bool:
+    return (
+        evidence is not None
+        and evidence.freshness is EvidenceFreshness.FRESH
+        and evidence.observed_at <= now
+        and now - evidence.observed_at <= timedelta(seconds=freshness_seconds)
+    )
 
 
 def _add(
     output: list[Contribution],
-    evidence: EvidenceBase,
+    evidence: EvidenceFact,
     group: str,
     polarity: Polarity,
     weight: float,
@@ -74,35 +82,57 @@ def _add(
     )
 
 
-def evidence_contributions(signals: SignalFacts) -> tuple[Contribution, ...]:
+def evidence_contributions(
+    signals: SignalFacts, *, now: datetime, freshness_seconds: int
+) -> tuple[Contribution, ...]:
     """Convert normalized facts using the exact guardian-rules/v1 thresholds."""
 
     output: list[Contribution] = []
     rate = signals.request_rate
-    if _fresh(rate) and rate is not None and rate.baseline_value is not None:
+    if (
+        _fresh(rate, now=now, freshness_seconds=freshness_seconds)
+        and rate is not None
+        and rate.baseline_value is not None
+    ):
         if rate.baseline_value > 0 and rate.value >= 2 * rate.baseline_value:
             _add(output, rate, "load", Polarity.SUPPORT, 0.40)
         elif rate.baseline_value > 0 and rate.value < 1.25 * rate.baseline_value:
             _add(output, rate, "load", Polarity.CONTRADICTION, 0.40)
 
     utilization = []
-    if signals.cpu_utilization is not None and _fresh(signals.cpu_utilization):
+    if signals.cpu_utilization is not None and _fresh(
+        signals.cpu_utilization, now=now, freshness_seconds=freshness_seconds
+    ):
         utilization.append(signals.cpu_utilization)
-    if signals.memory_utilization is not None and _fresh(signals.memory_utilization):
+    if signals.memory_utilization is not None and _fresh(
+        signals.memory_utilization, now=now, freshness_seconds=freshness_seconds
+    ):
         utilization.append(signals.memory_utilization)
     for item in utilization:
         if item.value >= 0.85:
             _add(output, item, "utilization", Polarity.SUPPORT, 0.40)
 
-    pressure: list[EvidenceBase] = []
+    pressure: list[EvidenceFact] = []
     throttling = signals.throttling_ratio
-    if _fresh(throttling) and throttling is not None and throttling.value >= 0.20:
+    if (
+        _fresh(throttling, now=now, freshness_seconds=freshness_seconds)
+        and throttling is not None
+        and throttling.value >= 0.20
+    ):
         pressure.append(throttling)
     oom = signals.oom_killed
-    if _fresh(oom) and oom is not None and oom.value:
+    if (
+        _fresh(oom, now=now, freshness_seconds=freshness_seconds)
+        and oom is not None
+        and oom.value
+    ):
         pressure.append(oom)
     restarts = signals.restart_delta
-    if _fresh(restarts) and restarts is not None and restarts.value >= 1:
+    if (
+        _fresh(restarts, now=now, freshness_seconds=freshness_seconds)
+        and restarts is not None
+        and restarts.value >= 1
+    ):
         pressure.append(restarts)
     for item in pressure:
         _add(output, item, "pressure", Polarity.SUPPORT, 0.35)
@@ -118,7 +148,10 @@ def evidence_contributions(signals: SignalFacts) -> tuple[Contribution, ...]:
         )
 
     deployment = signals.deployment_version
-    if _fresh(deployment) and deployment is not None:
+    if (
+        _fresh(deployment, now=now, freshness_seconds=freshness_seconds)
+        and deployment is not None
+    ):
         polarity = (
             Polarity.SUPPORT
             if deployment.previous_digest != deployment.current_digest
@@ -127,12 +160,20 @@ def evidence_contributions(signals: SignalFacts) -> tuple[Contribution, ...]:
         _add(output, deployment, "deployment", polarity, 0.40)
 
     errors = signals.error_rate
-    if _fresh(errors) and errors is not None and errors.baseline_value is not None:
+    if (
+        _fresh(errors, now=now, freshness_seconds=freshness_seconds)
+        and errors is not None
+        and errors.baseline_value is not None
+    ):
         if errors.value >= max(0.05, 2 * errors.baseline_value):
             _add(output, errors, "exceptions", Polarity.SUPPORT, 0.45)
 
     latency = signals.p95_latency_ms
-    if _fresh(latency) and latency is not None and latency.baseline_value is not None:
+    if (
+        _fresh(latency, now=now, freshness_seconds=freshness_seconds)
+        and latency is not None
+        and latency.baseline_value is not None
+    ):
         if (
             latency.value >= 1.5 * latency.baseline_value
             and latency.value - latency.baseline_value >= 100
@@ -140,11 +181,18 @@ def evidence_contributions(signals: SignalFacts) -> tuple[Contribution, ...]:
             _add(output, latency, "latency", Polarity.SUPPORT, 0.45)
 
     topology = signals.topology_edge
-    if _fresh(topology) and topology is not None and topology.value:
+    if (
+        _fresh(topology, now=now, freshness_seconds=freshness_seconds)
+        and topology is not None
+        and topology.value
+    ):
         _add(output, topology, "topology", Polarity.SUPPORT, 0.35)
 
     dependency = signals.dependency_healthy
-    if _fresh(dependency) and dependency is not None:
+    if (
+        _fresh(dependency, now=now, freshness_seconds=freshness_seconds)
+        and dependency is not None
+    ):
         _add(
             output,
             dependency,
@@ -170,11 +218,18 @@ def _deduplicate_contributions(
 
 
 def score_hypotheses(
-    signals: SignalFacts, *, telemetry_healthy: bool, identity_resolved: bool
+    signals: SignalFacts,
+    *,
+    telemetry_healthy: bool,
+    identity_resolved: bool,
+    now: datetime,
+    freshness_seconds: int,
 ) -> tuple[HypothesisScore, ...]:
     """Score and gate every supported causal hypothesis deterministically."""
 
-    contributions = evidence_contributions(signals)
+    contributions = evidence_contributions(
+        signals, now=now, freshness_seconds=freshness_seconds
+    )
     results: list[HypothesisScore] = []
     for name, required_sets in HYPOTHESIS_GROUPS.items():
         relevant_groups = frozenset().union(*required_sets)

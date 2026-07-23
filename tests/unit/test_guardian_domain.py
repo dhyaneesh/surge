@@ -57,19 +57,21 @@ def numeric(
     group: str = "metric",
     confidence: float = 1.0,
     tenant: str = "tenant-a",
+    subject_role: str = "request-processor",
 ) -> NumericEvidence:
+    expected_samples = 10_000
     return NumericEvidence(
         tenant_id=tenant,
+        subject_role=subject_role,
         value=value,
         baseline_value=baseline,
         observed_at=NOW,
         freshness=EvidenceFreshness.FRESH,
         source=EvidenceSource.QUERY_CONTRACT,
         provenance_ref="query-contract/sample",
-        confidence=confidence,
         independence_group=group,
-        expected_samples=10,
-        usable_samples=10,
+        expected_samples=expected_samples,
+        usable_samples=round(confidence * expected_samples),
     )
 
 
@@ -81,12 +83,12 @@ def boolean(
 ) -> BooleanEvidence:
     return BooleanEvidence(
         tenant_id=tenant,
+        subject_role="dependency" if group == "dependency" else "request-processor",
         value=value,
         observed_at=NOW,
         freshness=EvidenceFreshness.FRESH,
         source=EvidenceSource.CONTROL_PLANE,
         provenance_ref=f"control/{group}",
-        confidence=1.0,
         independence_group=group,
         expected_samples=10,
         usable_samples=10,
@@ -96,13 +98,13 @@ def boolean(
 def version(previous: str = DIGEST_A, current: str = DIGEST_B) -> VersionEvidence:
     return VersionEvidence(
         tenant_id="tenant-a",
+        subject_role="request-processor",
         previous_digest=previous,
         current_digest=current,
         observed_at=NOW,
         freshness=EvidenceFreshness.FRESH,
         source=EvidenceSource.DEPLOYMENT_EVENT,
         provenance_ref="deployment/revision-2",
-        confidence=1.0,
         independence_group="deployment",
         expected_samples=1,
         usable_samples=1,
@@ -115,6 +117,7 @@ def base_facts(**changes: object) -> IncidentFacts:
         "incident_id": "incident-1",
         "observed_at": NOW,
         "identity": TargetIdentity(
+            target_role="request-processor",
             environment="production",
             namespace="payments",
             workload_kind="Deployment",
@@ -274,6 +277,39 @@ def test_low_group_confidence_blocks_eligibility() -> None:
     assert hypothesis.deterministic_score == pytest.approx(0.736)
     assert hypothesis.evidence_confidence == pytest.approx(0.84)
     assert not hypothesis.eligible
+
+
+def test_marked_fresh_evidence_older_than_contract_cannot_support() -> None:
+    old_rate = numeric(200, baseline=100, group="load").model_copy(
+        update={"observed_at": NOW - timedelta(hours=24)}
+    )
+    projection = evaluate_incident(
+        base_facts(
+            signals=SignalFacts(
+                request_rate=old_rate,
+                cpu_utilization=numeric(0.85, group="util"),
+            )
+        ),
+        now=NOW,
+    )
+    assert not score(projection, HypothesisName.LOAD_SPIKE).eligible
+
+
+def test_zero_samples_on_candidate_evidence_is_critical() -> None:
+    empty_rate = numeric(200, baseline=100, group="load").model_copy(
+        update={"usable_samples": 0}
+    )
+    projection = evaluate_incident(
+        base_facts(
+            signals=SignalFacts(
+                request_rate=empty_rate,
+                cpu_utilization=numeric(0.85, group="util"),
+            )
+        ),
+        now=NOW,
+    )
+    assert projection.incident_class is IncidentClass.TELEMETRY_FAILURE
+    assert CriticalIntegrityFailure.ZERO_SAMPLES in projection.integrity_failures
 
 
 @pytest.mark.parametrize(
@@ -700,6 +736,26 @@ def test_fresh_later_observation_can_verify_recovery() -> None:
     ).recovery_verified
 
 
+def test_foreign_assessment_evidence_cannot_verify_recovery() -> None:
+    facts = base_facts(
+        signals=SignalFacts(
+            request_rate=numeric(200, baseline=100, group="load", tenant="tenant-b")
+        ),
+        control=ControlFacts(action_completed_at=NOW - timedelta(minutes=1)),
+    )
+    update = ObservationUpdate(
+        tenant_id="tenant-a",
+        incident_id="incident-1",
+        observed_at=NOW,
+        window_started_at=NOW - timedelta(seconds=30),
+        telemetry=base_facts().telemetry,
+        service_healthy=True,
+        required_conditions_satisfied=True,
+        provenance_ref="recovery/window-2",
+    )
+    assert not evaluate_incident(facts, now=NOW, observation=update).recovery_verified
+
+
 def test_one_independence_group_contributes_to_only_one_polarity() -> None:
     projection = evaluate_incident(
         base_facts(
@@ -728,6 +784,7 @@ def test_models_reject_scenario_fields_naive_time_and_mutable_identity() -> None
         base_facts(observed_at=datetime(2026, 7, 23, 8, 0))
     with pytest.raises(ValidationError):
         TargetIdentity(
+            target_role="request-processor",
             environment="production",
             namespace="payments",
             workload_kind="Deployment",
@@ -743,15 +800,83 @@ def test_models_reject_scenario_fields_naive_time_and_mutable_identity() -> None
 
 @pytest.mark.parametrize(
     "missing",
-    ["provenance_ref", "confidence", "independence_group"],
+    ["provenance_ref", "independence_group"],
 )
-def test_evidence_requires_provenance_confidence_and_independence(
-    missing: str,
-) -> None:
+def test_evidence_requires_provenance_and_independence(missing: str) -> None:
     payload = numeric(1).model_dump()
     del payload[missing]
     with pytest.raises(ValidationError):
         NumericEvidence.model_validate(payload)
+
+
+def test_evidence_confidence_is_derived_only_from_sample_counts() -> None:
+    payload = numeric(1).model_dump()
+    payload["expected_samples"] = 4
+    payload["usable_samples"] = 2
+    evidence = NumericEvidence.model_validate(payload)
+    assert evidence.usable_confidence == 0.5
+    payload["confidence"] = 0.1
+    with pytest.raises(ValidationError):
+        NumericEvidence.model_validate(payload)
+    del payload["confidence"]
+    payload["usable_samples"] = 5
+    assert NumericEvidence.model_validate(payload).usable_confidence == 1.0
+
+
+def test_identity_and_evidence_roles_are_explicit_and_digest_is_optional() -> None:
+    identity = TargetIdentity(
+        target_role="request-processor",
+        environment="production",
+        namespace="payments",
+        workload_kind="Deployment",
+        workload_name="processor",
+        service_name="processor",
+        service_version="2026.07.23",
+    )
+    payload = numeric(1).model_dump()
+    payload["subject_role"] = "request-processor"
+    evidence = NumericEvidence.model_validate(payload)
+    assert identity.image_digest is None
+    assert evidence.subject_role == identity.target_role
+
+
+def test_target_role_mismatch_is_an_identity_conflict() -> None:
+    payload = numeric(200, baseline=100, group="load").model_dump()
+    payload["subject_role"] = "unrelated-role"
+    rate = NumericEvidence.model_validate(payload)
+    base_identity = base_facts().identity
+    assert base_identity is not None
+    identity_payload = base_identity.model_dump()
+    identity_payload["target_role"] = "request-processor"
+    identity = TargetIdentity.model_validate(identity_payload)
+    projection = evaluate_incident(
+        base_facts(
+            identity=identity,
+            signals=SignalFacts(
+                request_rate=rate,
+                cpu_utilization=numeric(0.85, group="util"),
+            ),
+        ),
+        now=NOW,
+    )
+    assert projection.incident_class is IncidentClass.TELEMETRY_FAILURE
+    assert CriticalIntegrityFailure.IDENTITY_CONFLICT in projection.integrity_failures
+
+
+def test_dependency_health_requires_dependency_subject_role() -> None:
+    projection = evaluate_incident(
+        base_facts(
+            signals=SignalFacts(
+                topology_edge=boolean(True, group="topology"),
+                dependency_healthy=boolean(False, group="dependency").model_copy(
+                    update={"subject_role": "request-processor"}
+                ),
+            )
+        ),
+        now=NOW,
+    )
+    assert projection.incident_class is IncidentClass.TELEMETRY_FAILURE
+    assert CriticalIntegrityFailure.IDENTITY_CONFLICT in projection.integrity_failures
 
 
 def test_model_never_authorizes_or_executes_mutations() -> None:

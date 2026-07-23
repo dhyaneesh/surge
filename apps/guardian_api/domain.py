@@ -36,6 +36,19 @@ EVIDENCE_GROUPS_BY_HYPOTHESIS = {
     HypothesisName.DEPENDENCY_FAILURE: ("dependency", "topology"),
 }
 
+TARGET_CORRELATED_SIGNALS = {
+    "request_rate",
+    "cpu_utilization",
+    "memory_utilization",
+    "throttling_ratio",
+    "oom_killed",
+    "restart_delta",
+    "deployment_version",
+    "error_rate",
+    "p95_latency_ms",
+    "topology_edge",
+}
+
 
 def _integrity_failures(
     telemetry: TelemetryFacts, *, identity_resolved: bool, now: datetime
@@ -71,14 +84,44 @@ def _discriminatory_groups(hypotheses: tuple) -> tuple[str, ...]:
     return tuple(dict.fromkeys(groups))
 
 
+def _evidence_integrity_failures(
+    facts: IncidentFacts,
+) -> tuple[CriticalIntegrityFailure, ...]:
+    failures: list[CriticalIntegrityFailure] = []
+    evidence_items = facts.signals.evidence_items()
+    if any(item.usable_samples == 0 for _, item in evidence_items):
+        failures.append(CriticalIntegrityFailure.ZERO_SAMPLES)
+    if facts.identity is not None and any(
+        name in TARGET_CORRELATED_SIGNALS
+        and item.subject_role != facts.identity.target_role
+        for name, item in evidence_items
+    ):
+        failures.append(CriticalIntegrityFailure.IDENTITY_CONFLICT)
+    dependency = facts.signals.dependency_healthy
+    if (
+        dependency is not None
+        and dependency.subject_role != "dependency"
+        and CriticalIntegrityFailure.IDENTITY_CONFLICT not in failures
+    ):
+        failures.append(CriticalIntegrityFailure.IDENTITY_CONFLICT)
+    return tuple(failures)
+
+
 def _recovery_verified(
     facts: IncidentFacts,
     observation: ObservationUpdate | None,
     *,
     now: datetime,
+    assessment_healthy: bool,
+    foreign_evidence: bool,
 ) -> bool:
     completed = facts.control.action_completed_at
-    if observation is None or completed is None:
+    if (
+        observation is None
+        or completed is None
+        or not assessment_healthy
+        or foreign_evidence
+    ):
         return False
     if (
         observation.tenant_id != facts.tenant_id
@@ -110,6 +153,9 @@ def evaluate_incident(
     failures = _integrity_failures(
         facts.telemetry, identity_resolved=identity_resolved, now=now
     )
+    for failure in _evidence_integrity_failures(facts):
+        if failure not in failures:
+            failures = (*failures, failure)
     foreign_evidence = any(
         item.tenant_id != facts.tenant_id for item in facts.signals.all_evidence()
     ) or (facts.scaler is not None and facts.scaler.tenant_id != facts.tenant_id)
@@ -121,6 +167,8 @@ def evaluate_incident(
         score_input,
         telemetry_healthy=telemetry_healthy,
         identity_resolved=identity_resolved and not foreign_evidence,
+        now=now,
+        freshness_seconds=facts.telemetry.freshness_seconds,
     )
     eligible = tuple(item for item in hypotheses if item.eligible)
     eligible_actions = tuple(
@@ -273,6 +321,12 @@ def evaluate_incident(
         approval_nonce_expires_at=approval_nonce_expires_at,
         foreign_evidence_rejected=foreign_evidence,
         scaler_result=scaler_result,
-        recovery_verified=_recovery_verified(facts, observation, now=now),
+        recovery_verified=_recovery_verified(
+            facts,
+            observation,
+            now=now,
+            assessment_healthy=telemetry_healthy,
+            foreign_evidence=foreign_evidence,
+        ),
         escalation_required=escalation_required,
     )

@@ -121,40 +121,45 @@ class ScalerResult(StrEnum):
 
 
 class TargetIdentity(StrictModel):
+    target_role: NonEmptyString
     environment: NonEmptyString
     namespace: NonEmptyString
     workload_kind: NonEmptyString
     workload_name: NonEmptyString
     service_name: NonEmptyString
-    image_digest: ImageDigest
+    service_version: NonEmptyString | None = None
+    image_digest: ImageDigest | None = None
 
 
-class EvidenceBase(StrictModel):
+class EvidenceFact(StrictModel):
     tenant_id: NonEmptyString
+    subject_role: NonEmptyString
     observed_at: AwareDatetime
     freshness: EvidenceFreshness
     source: EvidenceSource
     provenance_ref: NonEmptyString
-    confidence: UnitFloat
     independence_group: NonEmptyString
     expected_samples: int = Field(ge=1)
     usable_samples: int = Field(ge=0)
 
     @property
     def usable_confidence(self) -> float:
-        return min(1.0, self.usable_samples / self.expected_samples, self.confidence)
+        return min(1.0, self.usable_samples / self.expected_samples)
 
 
-class NumericEvidence(EvidenceBase):
+EvidenceBase = EvidenceFact
+
+
+class NumericEvidence(EvidenceFact):
     value: float = Field(allow_inf_nan=False)
     baseline_value: float | None = Field(default=None, allow_inf_nan=False)
 
 
-class BooleanEvidence(EvidenceBase):
+class BooleanEvidence(EvidenceFact):
     value: bool
 
 
-class VersionEvidence(EvidenceBase):
+class VersionEvidence(EvidenceFact):
     previous_digest: ImageDigest
     current_digest: ImageDigest
 
@@ -238,12 +243,15 @@ class SignalFacts(StrictModel):
     topology_edge: BooleanEvidence | None = None
     dependency_healthy: BooleanEvidence | None = None
 
-    def all_evidence(self) -> tuple[EvidenceBase, ...]:
+    def evidence_items(self) -> tuple[tuple[str, EvidenceFact], ...]:
         return tuple(
-            value
+            (name, value)
             for name in type(self).model_fields
-            if isinstance((value := getattr(self, name)), EvidenceBase)
+            if isinstance((value := getattr(self, name)), EvidenceFact)
         )
+
+    def all_evidence(self) -> tuple[EvidenceFact, ...]:
+        return tuple(value for _, value in self.evidence_items())
 
 
 class IncidentFacts(StrictModel):
