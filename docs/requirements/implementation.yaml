@@ -57,6 +57,8 @@ test_implementations:
   test_file: tests/unit/test_scenario_facts.py
 - test_obligation_id: TST-GRD-DRIFT-003-INTEGRATION
   test_file: tests/unit/test_scenario_facts.py
+- test_obligation_id: TST-GRD-MLO-002-REPLAY
+  test_file: tests/replay/test_deterministic_replay.py
 
 # DESIGN-RUNTIME-001 records only the process-local store/service capability.
 # This slice does not claim the Temporal, durable tenant-storage, or outbox

@@ -1,0 +1,21 @@
+# Pinned linux/amd64 digests for SigNoz chart 0.133.0.
+chart: signoz-0.133.0
+images:
+  alpine:3.18.2: "sha256:25fad2a32ad1f6f510e528448ae1ec69a28ef81916a004d3629874104f8a7f70"
+  altinity/clickhouse-operator:0.21.2: "sha256:f972ef4aec9959313a4d4407a83803c75f0be215af4a6811b3f2b890c15ba893"
+  altinity/metrics-exporter:0.21.2: "sha256:084a75d8ab0ba5c31ed9d923d301745d24f0e8a3cadf54cdbfe298443eda8da9"
+  busybox:1.35: "sha256:584c3aa5ea2787155c186d156a85c380db220a8c886c01aac511b99880290010"
+  clickhouse/clickhouse-server:25.12.5: "sha256:10f54f04de6c61b756c4eaf9f1d17464a4ac3e1f94b5b410e0dec92a24dbeda8"
+  docker.io/alpine:3.18.2: "sha256:25fad2a32ad1f6f510e528448ae1ec69a28ef81916a004d3629874104f8a7f70"
+  docker.io/altinity/clickhouse-operator:0.21.2: "sha256:f972ef4aec9959313a4d4407a83803c75f0be215af4a6811b3f2b890c15ba893"
+  docker.io/altinity/metrics-exporter:0.21.2: "sha256:084a75d8ab0ba5c31ed9d923d301745d24f0e8a3cadf54cdbfe298443eda8da9"
+  docker.io/busybox:1.35: "sha256:584c3aa5ea2787155c186d156a85c380db220a8c886c01aac511b99880290010"
+  docker.io/clickhouse/clickhouse-server:25.12.5: "sha256:10f54f04de6c61b756c4eaf9f1d17464a4ac3e1f94b5b410e0dec92a24dbeda8"
+  docker.io/library/alpine:3.18.2: "sha256:25fad2a32ad1f6f510e528448ae1ec69a28ef81916a004d3629874104f8a7f70"
+  docker.io/library/busybox:1.35: "sha256:584c3aa5ea2787155c186d156a85c380db220a8c886c01aac511b99880290010"
+  docker.io/signoz/signoz-otel-collector:v0.144.6: "sha256:13fca6050f79c49a0bdc644ccdc65a9248f22f3b4337d1e0680da026a764d77e"
+  docker.io/signoz/signoz:v0.133.0: "sha256:5e2b496c05d997a37e32e6eaa9649f1b3e9eb46bf93a81d4f54a18a50116a68a"
+  docker.io/signoz/zookeeper:3.7.1: "sha256:1e6c92e8656c299818acfaf72f11e59d68a92bfe39fc1b1137cd78d6ab6741aa"
+  signoz/signoz-otel-collector:v0.144.6: "sha256:13fca6050f79c49a0bdc644ccdc65a9248f22f3b4337d1e0680da026a764d77e"
+  signoz/signoz:v0.133.0: "sha256:5e2b496c05d997a37e32e6eaa9649f1b3e9eb46bf93a81d4f54a18a50116a68a"
+  signoz/zookeeper:3.7.1: "sha256:1e6c92e8656c299818acfaf72f11e59d68a92bfe39fc1b1137cd78d6ab6741aa"

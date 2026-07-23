@@ -1,0 +1,39 @@
+name: kind-matrix
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      retain_cluster:
+        description: Retain the KinD cluster for diagnosis after the workflow
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    env:
+      GUARDIAN_CLUSTER_RUN_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/bootstrap.sh
+      - run: .tools/bin/task local:up
+      - name: Run environment matrix
+        run: |
+          set -a
+          . "artifacts/local/${GUARDIAN_CLUSTER_RUN_ID}/env"
+          set +a
+          .tools/bin/task test:matrix
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kind-matrix-artifacts
+          path: artifacts/
+          if-no-files-found: ignore
+      - name: Tear down KinD
+        if: always()
+        env:
+          GUARDIAN_CLUSTER_RETAIN: ${{ inputs.retain_cluster && '1' || '0' }}
+        run: .tools/bin/task local:down

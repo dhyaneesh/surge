@@ -1,0 +1,27 @@
+name: pull-request
+
+on:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/bootstrap.sh
+      - run: .tools/bin/task format:check
+      - run: .tools/bin/task lint
+      - run: .tools/bin/task typecheck
+      - run: .tools/bin/task test:unit
+      - run: .tools/bin/task test:contract
+      - run: .tools/bin/task test:architecture
+      - run: .tools/bin/task test:integration
+      - run: .tools/bin/task test:security
+      - run: .tools/bin/task test:replay
+      - run: .tools/bin/task requirements:check
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scenario-artifacts
+          path: artifacts/
+          if-no-files-found: ignore

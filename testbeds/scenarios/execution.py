@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from testbeds.adapters.base import EnvironmentAdapter
 from testbeds.evidence.collector import EvidenceSample, UnavailableEvidence
@@ -28,10 +28,10 @@ from testbeds.scenarios.compatibility import (
     EnvironmentDeclaration,
     derive_compatibility,
 )
+from testbeds.scenarios.evidence_provider import ScenarioEvidenceProvider
 from testbeds.scenarios.facts import (
     ControlStimulus,
     FactBuildContext,
-    MissingEvidenceError,
     build_incident_submission,
     build_observation_update,
 )
@@ -81,9 +81,7 @@ class AdapterRegistration:
     role_bindings: Mapping[str, str]
     fault_role_bindings: Mapping[FaultType, str]
     deployment_bindings: Mapping[str, tuple[str, str]]
-    evidence_samples: tuple[EvidenceSample | UnavailableEvidence, ...] = ()
-    # Distinct post-reset samples; must not reuse assessment spike evidence.
-    recovery_evidence_samples: tuple[EvidenceSample | UnavailableEvidence, ...] = ()
+    evidence_provider: ScenarioEvidenceProvider
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,113 +141,6 @@ def _control_stimulus(
         foreign_tenant=stimulus.tenant_injection is not None,
         action_completed_at=action_completed_at,
     )
-
-
-def _evidence_for_context(
-    registration: AdapterRegistration, observed_at: datetime
-) -> tuple[EvidenceSample | UnavailableEvidence, ...]:
-    if registration.evidence_samples:
-        return _refresh_sample_times(registration.evidence_samples, observed_at)
-    raise MissingEvidenceError(
-        "scenario execution requires collector evidence samples; "
-        "empty evidence_samples cannot fabricate telemetry quality"
-    )
-
-
-def _recovery_evidence_for_context(
-    registration: AdapterRegistration, observed_at: datetime
-) -> tuple[EvidenceSample | UnavailableEvidence, ...]:
-    """Post-reset samples must be independent of assessment spike evidence."""
-
-    if registration.recovery_evidence_samples:
-        return _refresh_sample_times(
-            registration.recovery_evidence_samples, observed_at
-        )
-    telemetry_only = _telemetry_only_healthy_samples(
-        registration.evidence_samples, observed_at
-    )
-    if telemetry_only:
-        return telemetry_only
-    # Do not refresh assessment spike evidence_samples to look fresh for recovery.
-    raise MissingEvidenceError(
-        "post-reset recovery requires distinct recovery_evidence_samples "
-        "(or telemetry-only healthy samples); assessment spike samples cannot "
-        "be reused as recovery evidence"
-    )
-
-
-_SPIKE_VALUE_KEYS = frozenset(
-    {
-        "request_rate",
-        "baseline_request_rate",
-        "cpu_utilization",
-        "memory_utilization",
-        "error_rate",
-        "baseline_error_rate",
-        "p95_latency_ms",
-        "restart_delta",
-        "throttling_ratio",
-    }
-)
-
-
-def _telemetry_only_healthy_samples(
-    samples: Sequence[EvidenceSample | UnavailableEvidence],
-    observed_at: datetime,
-) -> tuple[EvidenceSample, ...]:
-    """Keep only healthy SigNoz telemetry samples without load/util spike values."""
-
-    from testbeds.evidence.contracts import EvidenceSourceKind
-
-    selected: list[EvidenceSample] = []
-    for item in samples:
-        if not isinstance(item, EvidenceSample):
-            continue
-        if item.source_kind is not EvidenceSourceKind.SIGNOZ_TELEMETRY:
-            continue
-        if float(item.values.get("quality", 0.0)) < 0.80:
-            continue
-        if _SPIKE_VALUE_KEYS.intersection(item.values):
-            continue
-        selected.append(
-            EvidenceSample(
-                item.source_kind,
-                observed_at=observed_at,
-                provenance_ref=item.provenance_ref,
-                values=item.values,
-                diagnostics=item.diagnostics,
-            )
-        )
-    return tuple(selected)
-
-
-def _refresh_sample_times(
-    samples: Sequence[EvidenceSample | UnavailableEvidence],
-    observed_at: datetime,
-) -> tuple[EvidenceSample | UnavailableEvidence, ...]:
-    refreshed: list[EvidenceSample | UnavailableEvidence] = []
-    for item in samples:
-        if isinstance(item, EvidenceSample):
-            refreshed.append(
-                EvidenceSample(
-                    item.source_kind,
-                    observed_at=observed_at,
-                    provenance_ref=item.provenance_ref,
-                    values=item.values,
-                    diagnostics=item.diagnostics,
-                )
-            )
-        else:
-            refreshed.append(
-                UnavailableEvidence(
-                    item.source_kind,
-                    reason=item.reason,
-                    observed_at=observed_at,
-                    provenance_ref=item.provenance_ref,
-                    diagnostics=item.diagnostics,
-                )
-            )
-    return tuple(refreshed)
 
 
 _EVIDENCE_TYPE_SIGNALS: dict[str, frozenset[str]] = {
@@ -459,16 +350,29 @@ class ScenarioExecutor:
 
             observed_at = datetime.now(UTC)
             control = _control_stimulus(scenario, observed_at=observed_at)
-            evidence_samples = _evidence_for_context(registration, observed_at)
+            control_results: Mapping[str, Any] = {
+                "load": load_artifacts[-1] if load_artifacts else None,
+                "fault": fault_artifacts[-1] if fault_artifacts else None,
+                "deployment": deployment_artifacts[-1]
+                if deployment_artifacts
+                else None,
+            }
+            evidence_samples = (
+                await registration.evidence_provider.collect_assessment_evidence(
+                    scenario=scenario,
+                    registration=registration,
+                    observations=observations,
+                    control_results=control_results,
+                )
+            )
+            writer.write("assessment-evidence.json", evidence_samples)
             ctx = _fact_context(
                 scenario,
                 registration,
                 observations,
-                load_result=load_artifacts[-1] if load_artifacts else None,
-                fault_result=fault_artifacts[-1] if fault_artifacts else None,
-                deployment_result=deployment_artifacts[-1]
-                if deployment_artifacts
-                else None,
+                load_result=control_results["load"],
+                fault_result=control_results["fault"],
+                deployment_result=control_results["deployment"],
                 observed_at=observed_at,
                 control=control,
                 tenant_id=settings.tenant_id,
@@ -534,6 +438,15 @@ class ScenarioExecutor:
                         settings.baseline_timeout
                     )
                 )
+                post_reset_state = await bounded(registration.adapter.observe_state())
+                recovery_samples = (
+                    await registration.evidence_provider.collect_recovery_evidence(
+                        scenario=scenario,
+                        registration=registration,
+                        post_reset_state=post_reset_state,
+                    )
+                )
+                writer.write("recovery-evidence.json", recovery_samples)
                 reset_completed = True
                 transition(ExecutionState.VERIFYING_RECOVERY)
                 writer.write("reset.json", {"completed": True})
@@ -545,6 +458,8 @@ class ScenarioExecutor:
                         ctx,
                         submissions[0].incident_id,
                         bounded,
+                        post_reset_state,
+                        recovery_samples,
                         observation_payloads,
                         guardian_artifacts,
                     )
@@ -687,14 +602,14 @@ class ScenarioExecutor:
         ctx: FactBuildContext | None,
         incident_id: str,
         bounded,
+        post_reset_state: EnvironmentState,
+        recovery_samples: Sequence[EvidenceSample | UnavailableEvidence],
         observation_payloads: list,
         guardian_artifacts: list,
     ) -> None:
         if ctx is None:
             return
-        fresh_state = await bounded(registration.adapter.observe_state())
         observed_at = datetime.now(UTC)
-        recovery_samples = _recovery_evidence_for_context(registration, observed_at)
         handoff = ctx.control.action_completed_at
         window_started_at = observed_at - timedelta(seconds=30)
         if handoff is not None and window_started_at <= handoff:
@@ -709,7 +624,7 @@ class ScenarioExecutor:
             window_key="post-reset-1",
             observed_at=observed_at,
             window_started_at=window_started_at,
-            observation_state=fresh_state,
+            observation_state=post_reset_state,
             evidence_samples=recovery_samples,
         )
         observation_payloads.append(observation)
