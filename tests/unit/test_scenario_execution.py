@@ -1,11 +1,13 @@
 import asyncio
 import copy
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from testbeds.environments.capabilities import ENVIRONMENT_DECLARATIONS
+from testbeds.evidence.collector import EvidenceSample
+from testbeds.evidence.contracts import EvidenceSourceKind
 from testbeds.models import (
     BaselineState,
     EnvironmentCapabilities,
@@ -30,6 +32,26 @@ from tests.unit.test_guardian_scenario_v1alpha2 import document
 
 
 DIGEST = "sha256:" + "a" * 64
+
+
+def _telemetry_samples(
+    observed_at: datetime | None = None,
+) -> tuple[EvidenceSample, ...]:
+    at = observed_at or datetime.now(UTC)
+    return (
+        EvidenceSample(
+            EvidenceSourceKind.SIGNOZ_TELEMETRY,
+            observed_at=at,
+            provenance_ref="signoz/telemetry-quality",
+            values={
+                "quality": 1.0,
+                "usable_samples": 10,
+                "required_samples": 10,
+                "pipeline_available": True,
+                "comparison_valid": True,
+            },
+        ),
+    )
 
 
 class RecordingAdapter:
@@ -107,7 +129,7 @@ class BlockingAdapter(RecordingAdapter):
         raise RuntimeError("unreachable")
 
 
-def registration(adapter, declaration=None):
+def registration(adapter, declaration=None, evidence_samples=None):
     return AdapterRegistration(
         environment="otel-demo",
         adapter=adapter,
@@ -116,6 +138,11 @@ def registration(adapter, declaration=None):
         role_bindings={"request-processor": "transaction-processor"},
         fault_role_bindings={},
         deployment_bindings={},
+        evidence_samples=(
+            tuple(evidence_samples)
+            if evidence_samples is not None
+            else _telemetry_samples()
+        ),
     )
 
 
@@ -414,3 +441,43 @@ def test_reset_failure_invalidates_environment_and_raises(tmp_path):
         (result.artifact_directory / "diagnostics.json").read_text()
     )
     assert diagnostics["environmentInvalidated"] is True
+
+
+def test_executor_fails_closed_when_evidence_samples_are_empty(tmp_path):
+    """Empty registration evidence must not fabricate healthy telemetry samples."""
+
+    scenario = load_guardian_scenario("testbeds/scenarios/healthy-load-no-action.yaml")
+    adapter = RecordingAdapter()
+    result = asyncio.run(
+        ScenarioExecutor(ScriptedGuardianClient(passing_snapshot())).execute(
+            scenario,
+            registration(adapter, evidence_samples=()),
+            ExecutionSettings(tmp_path, baseline_timeout=timedelta(seconds=1)),
+        )
+    )
+
+    assert result.status is ExecutionStatus.FAILED
+    error = next(item for item in result.assertions if item.name == "execution.error")
+    assert error.passed is False
+    assert (
+        "MissingEvidenceError" in str(error.actual)
+        or "evidence" in str(error.actual).lower()
+    )
+    payloads = json.loads(
+        (result.artifact_directory / "incident-payloads.json").read_text()
+    )
+    assert payloads == []
+
+
+def test_required_signals_include_scenario_supporting_evidence_groups() -> None:
+    from testbeds.scenarios.execution import _required_signals
+
+    scenario = load_guardian_scenario(
+        "testbeds/scenarios/legitimate-demand-scale-up.yaml"
+    )
+    assert isinstance(scenario, GuardianScenarioV1Alpha2)
+    required = _required_signals(scenario)
+    assert "telemetry_quality" in required
+    assert "request_rate" in required
+    assert "cpu_utilization" in required or "memory_utilization" in required
+    assert "dependency_healthy" in required

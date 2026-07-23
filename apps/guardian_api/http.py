@@ -201,11 +201,13 @@ def _scenario_workflow_states(snapshot: IncidentSnapshot) -> tuple[str, ...]:
             states.append(value)
     if "assessment" not in states:
         states.insert(1, "assessment")
-    if snapshot.projection.terminal_reason or snapshot.projection.recovery_verified:
+    if (
+        snapshot.projection.terminal_reason
+        or snapshot.projection.recovery_verified
+        or snapshot.projection.proposed_action is None
+    ):
         if "closed" not in states:
             states.append("closed")
-    elif "closed" not in states and snapshot.projection.proposed_action is None:
-        states.append("closed")
     return tuple(states)
 
 

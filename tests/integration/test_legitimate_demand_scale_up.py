@@ -212,7 +212,9 @@ def test_legitimate_demand_scale_up_with_controlled_otel_demo_and_real_api(
     assert result.environment_invalidated is False
     assert "install" in adapter.calls
     assert any(call.startswith("load:") for call in adapter.calls)
-    assert result.status in {ExecutionStatus.PASSED, ExecutionStatus.FAILED}
+    assert result.status is ExecutionStatus.PASSED
+    failed = [item for item in result.assertions if not item.passed]
+    assert failed == [], [item.model_dump(mode="json") for item in failed]
 
     payloads = json.loads(
         (result.artifact_directory / "incident-payloads.json").read_text()

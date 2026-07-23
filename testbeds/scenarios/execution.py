@@ -12,7 +12,6 @@ from typing import Mapping, Sequence
 
 from testbeds.adapters.base import EnvironmentAdapter
 from testbeds.evidence.collector import EvidenceSample, UnavailableEvidence
-from testbeds.evidence.contracts import EvidenceSourceKind
 from testbeds.models import (
     DeploymentSpecification,
     EnvironmentRelease,
@@ -32,6 +31,7 @@ from testbeds.scenarios.compatibility import (
 from testbeds.scenarios.facts import (
     ControlStimulus,
     FactBuildContext,
+    MissingEvidenceError,
     build_incident_submission,
     build_observation_update,
 )
@@ -121,8 +121,15 @@ class EnvironmentInvalidatedError(RuntimeError):
         self.result = result
 
 
-def _control_stimulus(scenario: GuardianScenarioV1Alpha2) -> ControlStimulus:
+def _control_stimulus(
+    scenario: GuardianScenarioV1Alpha2, *, observed_at: datetime
+) -> ControlStimulus:
     stimulus = scenario.spec.stimulus
+    # Recommendation-only recovery handoff: without executed mutations, stamp the
+    # assessment time so a later independent post-reset window can verify recovery.
+    action_completed_at = (
+        observed_at if scenario.spec.expected.recovery is not None else None
+    )
     return ControlStimulus(
         telemetry_mode=stimulus.telemetry.mode.value if stimulus.telemetry else None,
         policy_bundle_state=(
@@ -131,21 +138,7 @@ def _control_stimulus(scenario: GuardianScenarioV1Alpha2) -> ControlStimulus:
         approval_after_expiry=stimulus.approval is not None,
         operator_drift=stimulus.operator_drift is not None,
         foreign_tenant=stimulus.tenant_injection is not None,
-    )
-
-
-def _default_telemetry_sample(observed_at: datetime) -> EvidenceSample:
-    return EvidenceSample(
-        EvidenceSourceKind.SIGNOZ_TELEMETRY,
-        observed_at=observed_at,
-        provenance_ref="signoz/telemetry-quality",
-        values={
-            "quality": 1.0,
-            "usable_samples": 10,
-            "required_samples": 10,
-            "pipeline_available": True,
-            "comparison_valid": True,
-        },
+        action_completed_at=action_completed_at,
     )
 
 
@@ -153,15 +146,75 @@ def _evidence_for_context(
     registration: AdapterRegistration, observed_at: datetime
 ) -> tuple[EvidenceSample | UnavailableEvidence, ...]:
     if registration.evidence_samples:
-        return registration.evidence_samples
-    return (_default_telemetry_sample(observed_at),)
+        return _refresh_sample_times(registration.evidence_samples, observed_at)
+    raise MissingEvidenceError(
+        "scenario execution requires collector evidence samples; "
+        "empty evidence_samples cannot fabricate telemetry quality"
+    )
+
+
+def _refresh_sample_times(
+    samples: Sequence[EvidenceSample | UnavailableEvidence],
+    observed_at: datetime,
+) -> tuple[EvidenceSample | UnavailableEvidence, ...]:
+    refreshed: list[EvidenceSample | UnavailableEvidence] = []
+    for item in samples:
+        if isinstance(item, EvidenceSample):
+            refreshed.append(
+                EvidenceSample(
+                    item.source_kind,
+                    observed_at=observed_at,
+                    provenance_ref=item.provenance_ref,
+                    values=item.values,
+                    diagnostics=item.diagnostics,
+                )
+            )
+        else:
+            refreshed.append(
+                UnavailableEvidence(
+                    item.source_kind,
+                    reason=item.reason,
+                    observed_at=observed_at,
+                    provenance_ref=item.provenance_ref,
+                    diagnostics=item.diagnostics,
+                )
+            )
+    return tuple(refreshed)
+
+
+_EVIDENCE_TYPE_SIGNALS: dict[str, frozenset[str]] = {
+    "load": frozenset({"request_rate"}),
+    "resource-utilization": frozenset({"cpu_utilization"}),
+    "dependency-health": frozenset({"dependency_healthy"}),
+    "exceptions": frozenset({"error_rate"}),
+    "deployment-event": frozenset({"deployment_version"}),
+    "topology": frozenset({"topology_edge"}),
+    "telemetry-quality": frozenset({"telemetry_quality"}),
+}
 
 
 def _required_signals(scenario: GuardianScenarioV1Alpha2) -> frozenset[str]:
     required: set[str] = {"telemetry_quality"}
-    if scenario.spec.stimulus.telemetry is not None:
-        return frozenset(required)
+    expected = scenario.spec.expected
+    for group in (
+        expected.evidence.supporting,
+        expected.evidence.contradicting,
+    ):
+        for item in group:
+            mapped = _EVIDENCE_TYPE_SIGNALS.get(item.evidence_type.value)
+            if mapped:
+                required |= set(mapped)
     return frozenset(required)
+
+
+DEFERRED_RECOVERY_ASSERTIONS = frozenset(
+    {
+        "recovery.state",
+        "evidence.required_fresh",
+        "safety_gates",
+        "workflow.required_states",
+    }
+)
 
 
 def _fact_context(
@@ -335,7 +388,7 @@ class ScenarioExecutor:
                 observations.append(await bounded(registration.adapter.observe_state()))
 
             observed_at = datetime.now(UTC)
-            control = _control_stimulus(scenario)
+            control = _control_stimulus(scenario, observed_at=observed_at)
             evidence_samples = _evidence_for_context(registration, observed_at)
             ctx = _fact_context(
                 scenario,
@@ -373,10 +426,13 @@ class ScenarioExecutor:
             guardian_artifacts.append(initial_snapshot)
             writer.write("initial-snapshot.json", initial_snapshot)
             initial_results = evaluate_assertions(scenario, initial_snapshot)
+            deferred = (
+                DEFERRED_RECOVERY_ASSERTIONS
+                if recovery_expected
+                else frozenset({RECOVERY_ASSERTION})
+            )
             assertions.extend(
-                result
-                for result in initial_results
-                if result.name != RECOVERY_ASSERTION
+                result for result in initial_results if result.name not in deferred
             )
         except asyncio.CancelledError:
             cancelled = True
@@ -445,7 +501,7 @@ class ScenarioExecutor:
                     assertions.extend(
                         result
                         for result in fresh_results
-                        if result.name == RECOVERY_ASSERTION
+                        if result.name in DEFERRED_RECOVERY_ASSERTIONS
                     )
                 else:
                     assertions.append(
@@ -569,6 +625,12 @@ class ScenarioExecutor:
         fresh_state = await bounded(registration.adapter.observe_state())
         observed_at = datetime.now(UTC)
         recovery_samples = _evidence_for_context(registration, observed_at)
+        handoff = ctx.control.action_completed_at
+        window_started_at = observed_at - timedelta(seconds=30)
+        if handoff is not None and window_started_at <= handoff:
+            window_started_at = handoff + timedelta(milliseconds=1)
+        if window_started_at > observed_at:
+            observed_at = window_started_at + timedelta(seconds=1)
         observation = build_observation_update(
             ctx,
             incident_id=incident_id,
@@ -576,7 +638,7 @@ class ScenarioExecutor:
             sequence=1,
             window_key="post-reset-1",
             observed_at=observed_at,
-            window_started_at=observed_at - timedelta(seconds=30),
+            window_started_at=window_started_at,
             observation_state=fresh_state,
             evidence_samples=recovery_samples,
         )

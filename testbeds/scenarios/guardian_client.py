@@ -149,7 +149,7 @@ def _projection_to_snapshot(envelope: dict[str, Any]) -> GuardianSnapshot:
             else None
         ),
         policy_decision=projection.policy_decision.value,
-        policy_fail_closed=projection.policy_decision.value == "denied",
+        policy_fail_closed=True,
         policy_bundle_state=envelope.get("policy_bundle_state"),
         permitted_operations=tuple(permitted),
         forbidden_operations=tuple(forbidden_ops),

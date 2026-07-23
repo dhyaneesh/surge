@@ -322,6 +322,15 @@ def evaluate_incident(
         else:
             proposed_action = RULE_DEFINITION.hypotheses[winner.name].action
             policy_decision = PolicyDecision.APPROVAL_REQUIRED
+            competing = (
+                ActionType.SCALE_UP,
+                ActionType.SCALE_DOWN,
+                ActionType.ROLLBACK,
+                ActionType.PROTECT_DEPENDENCY,
+            )
+            forbidden_actions.extend(
+                action for action in competing if action is not proposed_action
+            )
     elif (
         facts.evidence_pass.completed_passes >= 2
         or now - facts.evidence_pass.started_at >= timedelta(minutes=10)

@@ -226,6 +226,22 @@ def test_supported_hypotheses_are_deterministically_eligible(
     assert projection.executed_mutations == 0
 
 
+def test_proposed_scale_up_forbids_competing_mutating_actions() -> None:
+    projection = evaluate_incident(
+        base_facts(
+            signals=SignalFacts(
+                request_rate=numeric(200, baseline=100, group="load"),
+                cpu_utilization=numeric(0.85, group="util"),
+            )
+        ),
+        now=NOW,
+    )
+    assert projection.proposed_action is ActionType.SCALE_UP
+    assert ActionType.ROLLBACK in projection.forbidden_actions
+    assert ActionType.SCALE_DOWN in projection.forbidden_actions
+    assert ActionType.SCALE_UP not in projection.forbidden_actions
+
+
 def test_rollback_requires_correlated_version_identity() -> None:
     identity = base_facts().identity
     assert identity is not None
