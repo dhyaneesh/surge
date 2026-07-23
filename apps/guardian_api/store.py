@@ -8,20 +8,22 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from threading import RLock
-from typing import Any, NoReturn, Self
+from typing import Any
 
-from pydantic import BaseModel
+from pydantic import AwareDatetime, BaseModel, model_validator
 
+from apps.guardian_api.domain import evaluate_incident
 from apps.guardian_api.models import (
     GuardianProjection,
     IncidentFacts,
-    NonEmptyString,
     ObservationUpdate,
+    ScopedIdentifier,
     StrictModel,
 )
 
@@ -31,7 +33,19 @@ class IdempotencyConflictError(RuntimeError):
 
 
 class IncidentInvariantError(RuntimeError):
-    """A store update attempted to rewrite immutable incident history."""
+    """An incident mutation violated its immutable identity or history."""
+
+
+class ProjectionInvariantError(IncidentInvariantError):
+    """A trusted projector returned an invalid replay history."""
+
+
+class ObservationOrderError(IncidentInvariantError):
+    """An observation arrived before the latest persisted observation."""
+
+
+class ReentrantStoreWriteError(IncidentInvariantError):
+    """A projector attempted a nested write in the active transaction."""
 
 
 class IncidentNotFoundError(LookupError):
@@ -44,12 +58,29 @@ class IncidentNotFoundError(LookupError):
 class IncidentSnapshot(StrictModel):
     """Immutable application state returned without exposing store-owned objects."""
 
-    tenant_id: NonEmptyString
-    incident_id: NonEmptyString
-    workflow_id: NonEmptyString
+    tenant_id: ScopedIdentifier
+    incident_id: ScopedIdentifier
+    workflow_id: str
     facts: IncidentFacts
     observations: tuple[ObservationUpdate, ...] = ()
+    evaluation_times: tuple[AwareDatetime, ...]
+    projection_history: tuple[GuardianProjection, ...]
     projection: GuardianProjection
+
+    @model_validator(mode="after")
+    def histories_are_aligned(self) -> IncidentSnapshot:
+        expected = len(self.observations) + 1
+        if len(self.evaluation_times) != expected:
+            raise ValueError(
+                "evaluation history must align with facts and observations"
+            )
+        if len(self.projection_history) != expected:
+            raise ValueError(
+                "projection history must align with facts and observations"
+            )
+        if self.projection != self.projection_history[-1]:
+            raise ValueError("final projection must be the latest history entry")
+        return self
 
 
 class StoreSnapshot(StrictModel):
@@ -59,42 +90,16 @@ class StoreSnapshot(StrictModel):
     idempotency_count: int
 
 
-class _FrozenDict(dict[str, float]):
-    """JSON-serializable immutable dictionary for detached projections."""
-
-    @staticmethod
-    def _immutable() -> NoReturn:
-        raise TypeError("snapshot mappings are immutable")
-
-    def __setitem__(self, key: str, value: float) -> None:
-        self._immutable()
-
-    def __delitem__(self, key: str) -> None:
-        self._immutable()
-
-    def clear(self) -> None:
-        self._immutable()
-
-    def pop(self, *args: Any, **kwargs: Any) -> Any:
-        self._immutable()
-
-    def popitem(self) -> tuple[str, float]:
-        self._immutable()
-
-    def setdefault(self, *args: Any, **kwargs: Any) -> Any:
-        self._immutable()
-
-    def update(self, *args: Any, **kwargs: Any) -> None:
-        self._immutable()
-
-    def __ior__(self, value: Any) -> Self:
-        self._immutable()
-
-
 @dataclass(frozen=True)
 class _IdempotencyRecord:
     facts_hash: str
     incident_key: tuple[str, str]
+
+
+ProjectionReplayer = Callable[
+    [IncidentFacts, tuple[ObservationUpdate, ...], tuple[datetime, ...]],
+    tuple[GuardianProjection, ...],
+]
 
 
 def _canonical_value(value: Any) -> Any:
@@ -104,11 +109,12 @@ def _canonical_value(value: Any) -> Any:
         return _canonical_value(value.value)
     if isinstance(value, datetime):
         return value.astimezone(UTC).isoformat()
+    if isinstance(value, float) and value == 0.0:
+        return 0.0
     if isinstance(value, Mapping):
-        return {
-            str(key): _canonical_value(item)
-            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
-        }
+        if any(not isinstance(key, str) for key in value):
+            raise TypeError("canonical JSON mapping keys must be strings")
+        return {key: _canonical_value(value[key]) for key in sorted(value)}
     if isinstance(value, (set, frozenset)):
         normalized = [_canonical_value(item) for item in value]
         return sorted(
@@ -120,16 +126,23 @@ def _canonical_value(value: Any) -> Any:
     return value
 
 
+def canonical_json(value: Any) -> str:
+    """Return deterministic JSON for validated Guardian values."""
+
+    return json.dumps(
+        _canonical_value(value),
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
 def canonical_incident_facts(facts: IncidentFacts) -> str:
     """Serialize strict facts to sorted, whitespace-free canonical JSON."""
 
     if not isinstance(facts, IncidentFacts):
         raise TypeError("facts must be validated IncidentFacts")
-    return json.dumps(
-        _canonical_value(facts),
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    return canonical_json(facts)
 
 
 def incident_facts_hash(facts: IncidentFacts) -> str:
@@ -139,69 +152,104 @@ def incident_facts_hash(facts: IncidentFacts) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _copy_snapshot(snapshot: IncidentSnapshot) -> IncidentSnapshot:
-    copied = IncidentSnapshot.model_validate_json(snapshot.model_dump_json())
-    for hypothesis in copied.projection.hypotheses:
-        object.__setattr__(
-            hypothesis,
-            "required_group_confidence",
-            _FrozenDict(hypothesis.required_group_confidence),
-        )
-    return copied
+def canonical_incident_snapshot(snapshot: IncidentSnapshot) -> str:
+    """Serialize a complete incident record for deterministic replay comparison."""
+
+    if not isinstance(snapshot, IncidentSnapshot):
+        raise TypeError("snapshot must be a validated IncidentSnapshot")
+    return canonical_json(snapshot)
 
 
-def _validate_update_invariants(
-    authenticated_tenant: str,
-    current: IncidentSnapshot,
-    replacement: IncidentSnapshot,
-) -> None:
-    immutable_identity_changed = (
-        current.tenant_id != authenticated_tenant
-        or current.facts.tenant_id != authenticated_tenant
-        or replacement.tenant_id != authenticated_tenant
-        or replacement.incident_id != current.incident_id
-        or replacement.workflow_id != current.workflow_id
-    )
-    if immutable_identity_changed:
-        raise IncidentInvariantError("incident identity is immutable")
-    if replacement.facts != current.facts:
-        raise IncidentInvariantError("initial incident facts are immutable")
+def replay_incident_history(
+    facts: IncidentFacts,
+    observations: tuple[ObservationUpdate, ...],
+    evaluation_times: tuple[datetime, ...],
+) -> tuple[GuardianProjection, ...]:
+    """Purely recompute the initial and observation-aligned projection history."""
 
-    prior_count = len(current.observations)
-    if (
-        len(replacement.observations) < prior_count
-        or replacement.observations[:prior_count] != current.observations
-    ):
-        raise IncidentInvariantError("observation history is append-only")
+    if len(evaluation_times) != len(observations) + 1:
+        raise ProjectionInvariantError("evaluation times do not align with history")
     if any(
-        item.tenant_id != authenticated_tenant
-        or item.incident_id != current.incident_id
-        for item in replacement.observations[prior_count:]
+        current.observed_at < previous.observed_at
+        for previous, current in zip(observations, observations[1:])
     ):
-        raise IncidentInvariantError("observation identity must match its incident")
+        raise ObservationOrderError("replay history must be chronological")
+    projections = [evaluate_incident(facts, now=evaluation_times[0])]
+    projections.extend(
+        evaluate_incident(facts, now=evaluated_at, observation=observation)
+        for observation, evaluated_at in zip(
+            observations, evaluation_times[1:], strict=True
+        )
+    )
+    return tuple(projections)
+
+
+def _copy_snapshot(snapshot: IncidentSnapshot) -> IncidentSnapshot:
+    return IncidentSnapshot.model_validate_json(snapshot.model_dump_json())
 
 
 class InMemoryIncidentStore:
-    """One-lock local store keyed by authenticated tenant identity."""
+    """One-lock local store with only store-owned incident mutations."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self, *, projector: ProjectionReplayer = replay_incident_history
+    ) -> None:
         self._lock = RLock()
         self._idempotency: dict[tuple[str, str], _IdempotencyRecord] = {}
         self._incidents: dict[tuple[str, str], IncidentSnapshot] = {}
+        self._projector = projector
+        self._transaction_depth = 0
+        self._reentry_attempted = False
+
+    @contextmanager
+    def _write_transaction(self) -> Iterator[None]:
+        with self._lock:
+            if self._transaction_depth:
+                self._reentry_attempted = True
+                raise ReentrantStoreWriteError("nested store writes are prohibited")
+            self._transaction_depth = 1
+            self._reentry_attempted = False
+            try:
+                yield
+                if self._reentry_attempted:
+                    raise ReentrantStoreWriteError("projector attempted a nested write")
+            finally:
+                self._transaction_depth = 0
+                self._reentry_attempted = False
+
+    def _project(
+        self,
+        facts: IncidentFacts,
+        observations: tuple[ObservationUpdate, ...],
+        evaluation_times: tuple[datetime, ...],
+    ) -> tuple[GuardianProjection, ...]:
+        history = self._projector(facts, observations, evaluation_times)
+        if self._reentry_attempted:
+            raise ReentrantStoreWriteError("projector attempted a nested write")
+        if (
+            not isinstance(history, tuple)
+            or len(history) != len(observations) + 1
+            or any(not isinstance(item, GuardianProjection) for item in history)
+        ):
+            raise ProjectionInvariantError("projector returned an invalid history")
+        return history
 
     def create_idempotent(
         self,
         *,
         authenticated_tenant: str,
         idempotency_key: str,
-        facts_hash: str,
-        candidate: IncidentSnapshot,
+        facts: IncidentFacts,
+        now: datetime,
     ) -> IncidentSnapshot:
         """Atomically claim a key and create or return its incident."""
 
+        if facts.tenant_id != authenticated_tenant:
+            raise IncidentInvariantError("facts tenant must match authenticated tenant")
         idempotency_identity = (authenticated_tenant, idempotency_key)
-        incident_identity = (authenticated_tenant, candidate.incident_id)
-        with self._lock:
+        incident_identity = (authenticated_tenant, facts.incident_id)
+        facts_hash = incident_facts_hash(facts)
+        with self._write_transaction():
             claimed = self._idempotency.get(idempotency_identity)
             if claimed is not None:
                 if claimed.facts_hash != facts_hash:
@@ -218,13 +266,76 @@ class InMemoryIncidentStore:
                     )
                 stored = existing
             else:
-                stored = _copy_snapshot(candidate)
+                evaluation_times = (now,)
+                projection_history = self._project(facts, (), evaluation_times)
+                stored = IncidentSnapshot(
+                    tenant_id=authenticated_tenant,
+                    incident_id=facts.incident_id,
+                    workflow_id=(
+                        f"guardian/{authenticated_tenant}/incident/{facts.incident_id}"
+                    ),
+                    facts=facts,
+                    evaluation_times=evaluation_times,
+                    projection_history=projection_history,
+                    projection=projection_history[-1],
+                )
+                stored = _copy_snapshot(stored)
                 self._incidents[incident_identity] = stored
 
             self._idempotency[idempotency_identity] = _IdempotencyRecord(
                 facts_hash=facts_hash,
                 incident_key=incident_identity,
             )
+            return _copy_snapshot(stored)
+
+    def append_observation(
+        self,
+        authenticated_tenant: str,
+        incident_id: str,
+        observation: ObservationUpdate,
+        *,
+        now: datetime,
+    ) -> IncidentSnapshot:
+        """Append one ordered observation and atomically replay complete history."""
+
+        identity = (authenticated_tenant, incident_id)
+        with self._write_transaction():
+            current = self._incidents.get(identity)
+            if current is None:
+                raise IncidentNotFoundError
+            if (
+                observation.tenant_id != authenticated_tenant
+                or observation.incident_id != incident_id
+            ):
+                raise IncidentInvariantError(
+                    "observation identity must match its incident"
+                )
+            if observation in current.observations:
+                return _copy_snapshot(current)
+            if (
+                current.observations
+                and observation.observed_at < current.observations[-1].observed_at
+            ):
+                raise ObservationOrderError(
+                    "observations must be appended in chronological order"
+                )
+            observations = (*current.observations, observation)
+            evaluation_times = (*current.evaluation_times, now)
+            projection_history = self._project(
+                current.facts, observations, evaluation_times
+            )
+            replacement = IncidentSnapshot(
+                tenant_id=current.tenant_id,
+                incident_id=current.incident_id,
+                workflow_id=current.workflow_id,
+                facts=current.facts,
+                observations=observations,
+                evaluation_times=evaluation_times,
+                projection_history=projection_history,
+                projection=projection_history[-1],
+            )
+            stored = _copy_snapshot(replacement)
+            self._incidents[identity] = stored
             return _copy_snapshot(stored)
 
     def get(self, authenticated_tenant: str, incident_id: str) -> IncidentSnapshot:
@@ -235,25 +346,6 @@ class InMemoryIncidentStore:
             if snapshot is None:
                 raise IncidentNotFoundError
             return _copy_snapshot(snapshot)
-
-    def update(
-        self,
-        authenticated_tenant: str,
-        incident_id: str,
-        update: Callable[[IncidentSnapshot], IncidentSnapshot],
-    ) -> IncidentSnapshot:
-        """Apply a pure update while holding the same lock as all store state."""
-
-        identity = (authenticated_tenant, incident_id)
-        with self._lock:
-            current = self._incidents.get(identity)
-            if current is None:
-                raise IncidentNotFoundError
-            replacement = update(_copy_snapshot(current))
-            _validate_update_invariants(authenticated_tenant, current, replacement)
-            stored = _copy_snapshot(replacement)
-            self._incidents[identity] = stored
-            return _copy_snapshot(stored)
 
     def snapshot(self) -> StoreSnapshot:
         """Return a sorted, detached copy of all local incident projections."""

@@ -76,6 +76,7 @@ design_capabilities:
     document: docs/superpowers/specs/2026-07-23-minimal-guardian-runtime-design.md
     section: Store and service boundary
   implementation:
+  - apps/guardian_api/models.py
   - apps/guardian_api/store.py
   - apps/guardian_api/service.py
   tests:

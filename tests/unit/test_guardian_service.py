@@ -31,9 +31,13 @@ from apps.guardian_api.service import (
 )
 from apps.guardian_api.store import (
     InMemoryIncidentStore,
-    IncidentInvariantError,
+    ObservationOrderError,
+    ReentrantStoreWriteError,
+    canonical_incident_snapshot,
     canonical_incident_facts,
+    canonical_json,
     incident_facts_hash,
+    replay_incident_history,
 )
 
 
@@ -60,6 +64,7 @@ def facts(
     tenant_id: str = "tenant-a",
     incident_id: str = "incident-1",
     severity: IncidentSeverity = IncidentSeverity.WARNING,
+    control: ControlFacts | None = None,
 ) -> IncidentFacts:
     return IncidentFacts(
         tenant_id=tenant_id,
@@ -79,7 +84,7 @@ def facts(
         evidence_pass=EvidencePass(completed_passes=1, started_at=NOW),
         signals=SignalFacts(),
         policy=PolicyFacts(state=PolicyState.FRESH, evaluated_at=NOW),
-        control=ControlFacts(),
+        control=control or ControlFacts(),
     )
 
 
@@ -116,6 +121,43 @@ def test_canonical_facts_use_sorted_stable_json_before_hashing() -> None:
     assert incident_facts_hash(original) == incident_facts_hash(reordered)
 
 
+def test_canonical_json_normalizes_negative_zero_and_rejects_non_string_keys() -> None:
+    assert canonical_json({"value": -0.0}) == '{"value":0.0}'
+    negative_zero = facts().model_copy(
+        update={
+            "telemetry": facts().telemetry.model_copy(
+                update={"clock_skew_seconds": -0.0}
+            )
+        }
+    )
+    assert incident_facts_hash(negative_zero) == incident_facts_hash(facts())
+    with pytest.raises(TypeError, match="mapping keys must be strings"):
+        canonical_json({1: "invalid"})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("tenant_id", "tenant/a"),
+        ("incident_id", "incident/a"),
+        ("tenant_id", "guardian/tenant/incident/id"),
+    ],
+)
+def test_incident_scope_identifiers_reject_workflow_delimiters(
+    field: str, value: str
+) -> None:
+    payload = facts().model_dump()
+    payload[field] = value
+    with pytest.raises(ValidationError):
+        IncidentFacts.model_validate(payload)
+
+
+def test_service_rejects_invalid_authenticated_tenant_identifier() -> None:
+    service = GuardianService(InMemoryIncidentStore())
+    with pytest.raises(ValueError, match="authenticated tenant"):
+        service.get_incident("tenant/a", "incident-1")
+
+
 def test_concurrent_duplicate_submissions_create_one_incident_and_workflow() -> None:
     store = InMemoryIncidentStore()
     service = GuardianService(store)
@@ -143,6 +185,34 @@ def test_concurrent_duplicate_submissions_create_one_incident_and_workflow() -> 
         "guardian/tenant-a/incident/incident-1"
     }
     assert all(item == results[0] for item in results)
+
+
+def test_same_key_different_facts_race_has_one_winner_and_conflicts() -> None:
+    store = InMemoryIncidentStore()
+    service = GuardianService(store)
+    workers = 12
+    barrier = Barrier(workers)
+
+    def submit(index: int):
+        barrier.wait()
+        request = facts(incident_id=f"incident-{index}")
+        try:
+            return service.submit_incident(
+                "tenant-a", "racing-request", request, now=NOW
+            )
+        except IdempotencyConflictError as error:
+            return error
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        results = tuple(executor.map(submit, range(workers)))
+
+    successes = tuple(item for item in results if not isinstance(item, Exception))
+    conflicts = tuple(
+        item for item in results if isinstance(item, IdempotencyConflictError)
+    )
+    assert len(successes) == 1
+    assert len(conflicts) == workers - 1
+    assert len(store.snapshot().incidents) == 1
 
 
 def test_same_tenant_and_key_with_different_facts_conflicts() -> None:
@@ -223,79 +293,150 @@ def test_observation_cannot_change_the_incident_tenant_or_identity() -> None:
     assert service.get_incident("tenant-a", "incident-1").observations == ()
 
 
-@pytest.mark.parametrize(
-    "replacement_facts",
-    [
-        facts(tenant_id="tenant-b"),
-        facts(severity=IncidentSeverity.CRITICAL),
-    ],
-)
-def test_store_rejects_replaced_facts_without_persisting(
-    replacement_facts: IncidentFacts,
-) -> None:
+def test_store_exposes_only_narrow_append_not_arbitrary_update() -> None:
     store = InMemoryIncidentStore()
+    assert not hasattr(store, "update")
+
+
+def test_projector_failure_rolls_back_append() -> None:
+    def failing_projector(facts, observations, evaluation_times):
+        if observations:
+            raise RuntimeError("projection failed")
+        return replay_incident_history(facts, observations, evaluation_times)
+
+    store = InMemoryIncidentStore(projector=failing_projector)
     service = GuardianService(store)
     before = service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
 
-    with pytest.raises(IncidentInvariantError):
-        store.update(
+    with pytest.raises(RuntimeError, match="projection failed"):
+        service.append_observation(
             "tenant-a",
             "incident-1",
-            lambda current: current.model_copy(update={"facts": replacement_facts}),
+            observation(observed_at=NOW + timedelta(minutes=1)),
+            now=NOW + timedelta(minutes=1),
         )
 
     assert store.get("tenant-a", "incident-1") == before
 
 
-@pytest.mark.parametrize("field", ["tenant_id", "incident_id", "workflow_id"])
-def test_store_rejects_outer_identity_changes_with_typed_error(field: str) -> None:
-    store = InMemoryIncidentStore()
+def test_projector_reentry_is_rejected_and_rolls_back_outer_append() -> None:
+    store_reference: dict[str, InMemoryIncidentStore] = {}
+
+    def reentrant_projector(facts, observations, evaluation_times):
+        if observations:
+            try:
+                store_reference["store"].append_observation(
+                    "tenant-a",
+                    "incident-1",
+                    observation(observed_at=NOW + timedelta(minutes=2)),
+                    now=NOW + timedelta(minutes=2),
+                )
+            except ReentrantStoreWriteError:
+                pass
+        return replay_incident_history(facts, observations, evaluation_times)
+
+    store = InMemoryIncidentStore(projector=reentrant_projector)
+    store_reference["store"] = store
     service = GuardianService(store)
     before = service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
-    changed = {
-        "tenant_id": "tenant-b",
-        "incident_id": "incident-2",
-        "workflow_id": "guardian/tenant-a/incident/incident-2",
-    }
 
-    with pytest.raises(IncidentInvariantError):
-        store.update(
+    with pytest.raises(ReentrantStoreWriteError):
+        service.append_observation(
             "tenant-a",
             "incident-1",
-            lambda current: current.model_copy(update={field: changed[field]}),
+            observation(observed_at=NOW + timedelta(minutes=1)),
+            now=NOW + timedelta(minutes=1),
         )
 
     assert store.get("tenant-a", "incident-1") == before
 
 
-def test_store_rejects_truncated_or_modified_observation_history() -> None:
+def test_chronologically_older_observation_is_rejected_without_persistence() -> None:
     store = InMemoryIncidentStore()
     service = GuardianService(store)
     service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
-    first_observation = observation(
-        observed_at=NOW + timedelta(minutes=1), healthy=False
-    )
     before = service.append_observation(
         "tenant-a",
         "incident-1",
-        first_observation,
-        now=NOW + timedelta(minutes=1),
-    )
-    invalid_histories = (
-        (),
-        (first_observation.model_copy(update={"service_healthy": True}),),
+        observation(observed_at=NOW + timedelta(minutes=2)),
+        now=NOW + timedelta(minutes=2),
     )
 
-    for invalid_history in invalid_histories:
-        with pytest.raises(IncidentInvariantError):
-            store.update(
-                "tenant-a",
-                "incident-1",
-                lambda current, history=invalid_history: current.model_copy(
-                    update={"observations": history}
-                ),
-            )
-        assert store.get("tenant-a", "incident-1") == before
+    with pytest.raises(ObservationOrderError):
+        service.append_observation(
+            "tenant-a",
+            "incident-1",
+            observation(observed_at=NOW + timedelta(minutes=1)),
+            now=NOW + timedelta(minutes=2),
+        )
+
+    assert store.get("tenant-a", "incident-1") == before
+
+
+def test_pure_replay_rejects_reordered_history() -> None:
+    later = observation(observed_at=NOW + timedelta(minutes=2))
+    earlier = observation(observed_at=NOW + timedelta(minutes=1))
+
+    with pytest.raises(ObservationOrderError):
+        replay_incident_history(
+            facts(),
+            (later, earlier),
+            (NOW, NOW + timedelta(minutes=2), NOW + timedelta(minutes=2)),
+        )
+
+
+def test_duplicate_observation_delivery_is_idempotent() -> None:
+    store = InMemoryIncidentStore()
+    service = GuardianService(store)
+    service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
+    update = observation(observed_at=NOW + timedelta(minutes=1))
+    first = service.append_observation(
+        "tenant-a",
+        "incident-1",
+        update,
+        now=NOW + timedelta(minutes=1),
+    )
+
+    duplicate = service.append_observation(
+        "tenant-a",
+        "incident-1",
+        update,
+        now=NOW + timedelta(minutes=2),
+    )
+
+    assert canonical_incident_snapshot(duplicate) == canonical_incident_snapshot(first)
+    assert len(duplicate.observations) == 1
+    assert len(duplicate.projection_history) == 2
+
+
+def test_simultaneous_appends_have_no_lost_updates() -> None:
+    store = InMemoryIncidentStore()
+    service = GuardianService(store)
+    service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
+    workers = 10
+    barrier = Barrier(workers)
+
+    def append(index: int):
+        barrier.wait()
+        update = observation(observed_at=NOW + timedelta(minutes=1)).model_copy(
+            update={"provenance_ref": f"query-contract/concurrent-{index}"}
+        )
+        return service.append_observation(
+            "tenant-a",
+            "incident-1",
+            update,
+            now=NOW + timedelta(minutes=1),
+        )
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        tuple(executor.map(append, range(workers)))
+
+    final = service.get_incident("tenant-a", "incident-1")
+    assert len(final.observations) == workers
+    assert len(final.projection_history) == workers + 1
+    assert {item.provenance_ref for item in final.observations} == {
+        f"query-contract/concurrent-{index}" for index in range(workers)
+    }
 
 
 def test_observations_are_append_only_and_reevaluate_history_deterministically() -> (
@@ -306,9 +447,15 @@ def test_observations_are_append_only_and_reevaluate_history_deterministically()
     )
     second_observation = observation(observed_at=NOW + timedelta(minutes=2))
 
+    incident_facts = facts(
+        control=ControlFacts(action_completed_at=NOW - timedelta(minutes=1))
+    )
+
     def run_sequence():
         service = GuardianService(InMemoryIncidentStore())
-        initial = service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
+        initial = service.submit_incident(
+            "tenant-a", "request-1", incident_facts, now=NOW
+        )
         first = service.append_observation(
             "tenant-a",
             "incident-1",
@@ -329,7 +476,13 @@ def test_observations_are_append_only_and_reevaluate_history_deterministically()
     assert initial.observations == ()
     assert first.observations == (first_observation,)
     assert second.observations == (first_observation, second_observation)
-    assert second.model_dump_json() == repeated.model_dump_json()
+    assert len(second.projection_history) == 3
+    assert not second.projection_history[1].recovery_verified
+    assert second.projection_history[2].recovery_verified
+    assert second.projection == second.projection_history[-1]
+    assert canonical_incident_snapshot(first) != canonical_incident_snapshot(second)
+    assert first_observation.provenance_ref in canonical_incident_snapshot(second)
+    assert canonical_incident_snapshot(second) == canonical_incident_snapshot(repeated)
 
 
 def test_returned_snapshots_are_frozen_copies_not_store_objects() -> None:
@@ -341,7 +494,14 @@ def test_returned_snapshots_are_frozen_copies_not_store_objects() -> None:
 
     confidence = created.projection.hypotheses[0].required_group_confidence
     with pytest.raises(TypeError):
-        confidence["caller-mutation"] = 0.0
+        confidence["caller-mutation"] = 0.0  # type: ignore[index]
+    assert not isinstance(confidence, dict)
+    with pytest.raises(TypeError):
+        dict.__setitem__(
+            confidence,  # type: ignore[arg-type]
+            "base-class-mutation",
+            0.0,
+        )
     loaded = service.get_incident("tenant-a", "incident-1")
 
     assert (

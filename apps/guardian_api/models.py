@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
 from datetime import datetime
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Annotated, Literal, Self
 
 from pydantic import (
@@ -12,11 +14,17 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
+    field_serializer,
     model_validator,
 )
 
 
 NonEmptyString = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+SCOPED_IDENTIFIER_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+ScopedIdentifier = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, pattern=SCOPED_IDENTIFIER_PATTERN),
+]
 ImageDigest = Annotated[str, StringConstraints(pattern=r"^sha256:[0-9a-f]{64}$")]
 UnitFloat = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
 NonNegativeFloat = Annotated[float, Field(ge=0, allow_inf_nan=False)]
@@ -26,6 +34,27 @@ class StrictModel(BaseModel):
     """Immutable input and output model with an exact schema."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+
+class ImmutableFloatMapping(Mapping[str, float]):
+    """Detached immutable mapping with no mutable dictionary base class."""
+
+    __slots__ = ("__data",)
+
+    def __init__(self, values: Mapping[str, float]) -> None:
+        self.__data = MappingProxyType(dict(values))
+
+    def __getitem__(self, key: str) -> float:
+        return self.__data[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.__data)
+
+    def __len__(self) -> int:
+        return len(self.__data)
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}({dict(self.__data)!r})"
 
 
 class EvidenceFreshness(StrEnum):
@@ -147,7 +176,7 @@ class TargetIdentity(StrictModel):
 
 
 class EvidenceFact(StrictModel):
-    tenant_id: NonEmptyString
+    tenant_id: ScopedIdentifier
     subject_role: NonEmptyString
     environment: NonEmptyString
     namespace: NonEmptyString
@@ -259,7 +288,7 @@ class ControlFacts(StrictModel):
 
 
 class ScalerFacts(StrictModel):
-    tenant_id: NonEmptyString
+    tenant_id: ScopedIdentifier
     source_value: float = Field(allow_inf_nan=False)
     source_expires_at: AwareDatetime
     requested_direction: ScalerDirection
@@ -308,8 +337,8 @@ class SignalFacts(StrictModel):
 
 class IncidentFacts(StrictModel):
     schema_version: Literal["guardian.incident-facts/v1"] = "guardian.incident-facts/v1"
-    tenant_id: NonEmptyString
-    incident_id: NonEmptyString
+    tenant_id: ScopedIdentifier
+    incident_id: ScopedIdentifier
     severity: IncidentSeverity = IncidentSeverity.WARNING
     observed_at: AwareDatetime
     identity: TargetIdentity | None
@@ -331,8 +360,8 @@ class ObservationUpdate(StrictModel):
     schema_version: Literal["guardian.observation-update/v1"] = (
         "guardian.observation-update/v1"
     )
-    tenant_id: NonEmptyString
-    incident_id: NonEmptyString
+    tenant_id: ScopedIdentifier
+    incident_id: ScopedIdentifier
     observed_at: AwareDatetime
     window_started_at: AwareDatetime
     telemetry: TelemetryFacts
@@ -355,8 +384,23 @@ class HypothesisScore(StrictModel):
     contradiction: UnitFloat
     deterministic_score: UnitFloat
     evidence_confidence: UnitFloat
-    required_group_confidence: dict[NonEmptyString, UnitFloat]
+    required_group_confidence: Mapping[NonEmptyString, UnitFloat]
     eligible: bool
+
+    @model_validator(mode="after")
+    def confidence_mapping_is_immutable(self) -> Self:
+        object.__setattr__(
+            self,
+            "required_group_confidence",
+            ImmutableFloatMapping(self.required_group_confidence),
+        )
+        return self
+
+    @field_serializer("required_group_confidence")
+    def serialize_required_group_confidence(
+        self, value: Mapping[str, float]
+    ) -> dict[str, float]:
+        return dict(value)
 
 
 class GuardianProjection(StrictModel):
