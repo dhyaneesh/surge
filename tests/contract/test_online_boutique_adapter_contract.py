@@ -13,7 +13,16 @@ from testbeds.models import FaultSpecification, FaultType, WorkloadSelector
 def test_online_boutique_adapter_satisfies_protocol(tmp_path):
     adapter = OnlineBoutiqueAdapter(workspace=tmp_path)
     assert isinstance(adapter, EnvironmentAdapter)
-    for operation in ("install", "reset", "wait_for_healthy_baseline", "apply_load", "inject_fault", "deploy_version", "observe_state", "cleanup"):
+    for operation in (
+        "install",
+        "reset",
+        "wait_for_healthy_baseline",
+        "apply_load",
+        "inject_fault",
+        "deploy_version",
+        "observe_state",
+        "cleanup",
+    ):
         assert inspect.iscoroutinefunction(getattr(adapter, operation))
 
 
@@ -27,11 +36,15 @@ def test_real_cluster_install_baseline_fault_reset_and_cleanup(tmp_path):
         adapter = OnlineBoutiqueAdapter(workspace=tmp_path)
         try:
             await adapter.install(ONLINE_BOUTIQUE_ENVIRONMENT.release())
-            assert (await adapter.wait_for_healthy_baseline(timedelta(minutes=15))).healthy
+            assert (
+                await adapter.wait_for_healthy_baseline(timedelta(minutes=15))
+            ).healthy
             load = await adapter.apply_load(ONLINE_BOUTIQUE_ENVIRONMENT.smoke_load)
             assert load.active
             await adapter.reset()
-            assert (await adapter.wait_for_healthy_baseline(timedelta(minutes=10))).healthy
+            assert (
+                await adapter.wait_for_healthy_baseline(timedelta(minutes=10))
+            ).healthy
             for specification in (
                 FaultSpecification(FaultType.HIGH_CPU, WorkloadSelector("cart"), 0.25),
                 FaultSpecification(

@@ -112,15 +112,16 @@ def _typed_array(
 
 
 def _cycles(items: list[dict[str, Any]], known_ids: set[str]) -> list[list[str]]:
-    graph = {
-        item.get("id"): [
+    graph: dict[str, list[str]] = {}
+    for item in items:
+        identifier = item.get("id")
+        if not isinstance(identifier, str) or identifier not in known_ids:
+            continue
+        graph[identifier] = [
             dependency
             for dependency in item.get("dependencies", [])
-            if dependency in known_ids
+            if isinstance(dependency, str) and dependency in known_ids
         ]
-        for item in items
-        if item.get("id") in known_ids
-    }
     state: dict[str, int] = {}
     stack: list[str] = []
     cycles: list[list[str]] = []
@@ -474,9 +475,7 @@ def validate_design_capability_paths(
                     continue
                 candidate = repository_root / value
                 resolved_candidate = candidate.resolve()
-                issue_path = (
-                    f"$.design_capabilities[{index}].{field}[{path_index}]"
-                )
+                issue_path = f"$.design_capabilities[{index}].{field}[{path_index}]"
                 if not resolved_candidate.is_relative_to(resolved_root):
                     _issue(
                         issues,
@@ -548,7 +547,7 @@ def validate_traceability(
     for index, record in enumerate(implementation_records):
         base = f"$.implementation.test_implementations[{index}]"
         identifier = record.get("test_obligation_id")
-        if identifier not in obligation_ids:
+        if not isinstance(identifier, str) or identifier not in obligation_ids:
             _issue(
                 issues,
                 "unknown_test_obligation_reference",
@@ -631,7 +630,7 @@ def validate_traceability(
                 f"{base}.schema_version",
                 "expected 'guardian.test-result/v1'",
             )
-        if identifier not in obligation_ids:
+        if not isinstance(identifier, str) or identifier not in obligation_ids:
             _issue(
                 issues,
                 "unknown_test_obligation_reference",

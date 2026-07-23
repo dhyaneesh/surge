@@ -2,7 +2,13 @@
 
 from dataclasses import dataclass
 
-from testbeds.models import EnvironmentRelease, FaultSpecification, FaultType, LoadProfile, WorkloadSelector
+from testbeds.models import (
+    EnvironmentRelease,
+    FaultSpecification,
+    FaultType,
+    LoadProfile,
+    WorkloadSelector,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,7 +21,14 @@ class KedaRabbitMqEnvironmentConfiguration:
     rabbitmq_image: str = "docker.io/bitnami/rabbitmq:3.12.12-debian-12-r0@sha256:3e652677d5e50ec76065fe352ae9ee8549a88e4cf0db6c8cf3b4970e4d6e6a11"
 
     def release(self) -> EnvironmentRelease:
-        return EnvironmentRelease("keda-rabbitmq", self.adapter_version, self.repository, self.commit_sha, self.helm_chart_version, self.rabbitmq_image.rsplit("@", 1)[1])
+        return EnvironmentRelease(
+            "keda-rabbitmq",
+            self.adapter_version,
+            self.repository,
+            self.commit_sha,
+            self.helm_chart_version,
+            self.rabbitmq_image.rsplit("@", 1)[1],
+        )
 
     @property
     def smoke_load(self) -> LoadProfile:
@@ -23,7 +36,9 @@ class KedaRabbitMqEnvironmentConfiguration:
 
     @property
     def smoke_fault(self) -> FaultSpecification:
-        return FaultSpecification(FaultType.DEPENDENCY_UNAVAILABLE, WorkloadSelector("rabbitmq"))
+        return FaultSpecification(
+            FaultType.DEPENDENCY_UNAVAILABLE, WorkloadSelector("rabbitmq")
+        )
 
 
 KEDA_RABBITMQ_ENVIRONMENT = KedaRabbitMqEnvironmentConfiguration()

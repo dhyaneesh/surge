@@ -95,9 +95,7 @@ class RegistryValidationTests(unittest.TestCase):
             )
         )
 
-        capabilities = {
-            item["id"]: item for item in registry["design_capabilities"]
-        }
+        capabilities = {item["id"]: item for item in registry["design_capabilities"]}
         self.assertIn("DESIGN-HARNESS-001", capabilities)
         capability = capabilities["DESIGN-HARNESS-001"]
         self.assertEqual(
@@ -289,8 +287,7 @@ class RegistryValidationTests(unittest.TestCase):
             (root / "tools").mkdir()
             (root / "tests").mkdir()
             codes = {
-                issue.code
-                for issue in validate_design_capability_paths(registry, root)
+                issue.code for issue in validate_design_capability_paths(registry, root)
             }
 
         self.assertEqual({"design_capability_path_not_file"}, codes)
@@ -316,8 +313,7 @@ class RegistryValidationTests(unittest.TestCase):
             (root / "tools/escaped.py").symlink_to(outside)
             (root / "tests/escaped.py").symlink_to(outside)
             codes = {
-                issue.code
-                for issue in validate_design_capability_paths(registry, root)
+                issue.code for issue in validate_design_capability_paths(registry, root)
             }
 
         self.assertEqual({"design_capability_path_outside_repository"}, codes)
