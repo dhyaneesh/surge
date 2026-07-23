@@ -12,9 +12,12 @@ from pydantic import ValidationError
 
 from apps.guardian_api.models import (
     ControlFacts,
+    EvidenceFreshness,
     EvidencePass,
+    EvidenceSource,
     IncidentFacts,
     IncidentSeverity,
+    NumericEvidence,
     ObservationUpdate,
     PolicyFacts,
     PolicyState,
@@ -110,6 +113,29 @@ def observation(
         service_healthy=healthy,
         required_conditions_satisfied=healthy,
         provenance_ref=f"query-contract/{observed_at.isoformat()}",
+    )
+
+
+def numeric_evidence(
+    value: float, *, baseline: float | None, group: str
+) -> NumericEvidence:
+    return NumericEvidence(
+        tenant_id="tenant-a",
+        subject_role="request-processor",
+        environment="production",
+        namespace="payments",
+        workload_kind="Deployment",
+        workload_name="processor",
+        service_name="processor",
+        value=value,
+        baseline_value=baseline,
+        observed_at=NOW,
+        freshness=EvidenceFreshness.FRESH,
+        source=EvidenceSource.QUERY_CONTRACT,
+        provenance_ref=f"query-contract/{group}",
+        independence_group=group,
+        expected_samples=10,
+        usable_samples=10,
     )
 
 
@@ -488,15 +514,16 @@ def test_conflicting_window_is_fail_closed_and_arrival_order_independent() -> No
     def run(first: ObservationUpdate, second: ObservationUpdate):
         service = GuardianService(InMemoryIncidentStore())
         service.submit_incident("tenant-a", "request-1", incident_facts, now=NOW)
-        service.append_observation(
+        first_snapshot = service.append_observation(
             "tenant-a", "incident-1", first, now=NOW + timedelta(minutes=1)
         )
-        return service.append_observation(
+        final_snapshot = service.append_observation(
             "tenant-a", "incident-1", second, now=NOW + timedelta(minutes=2)
         )
+        return first_snapshot, final_snapshot
 
-    healthy_first = run(healthy, unhealthy)
-    unhealthy_first = run(unhealthy, healthy)
+    healthy_only, healthy_first = run(healthy, unhealthy)
+    unhealthy_only, unhealthy_first = run(unhealthy, healthy)
 
     assert canonical_incident_snapshot(healthy_first) == canonical_incident_snapshot(
         unhealthy_first
@@ -507,6 +534,52 @@ def test_conflicting_window_is_fail_closed_and_arrival_order_independent() -> No
     assert not healthy_first.projection.recovery_verified
     assert healthy_first.projection.proposed_action is None
     assert not healthy_first.projection.eligible_actions
+    assert healthy_first.evaluation_times == (
+        incident_facts.observed_at,
+        healthy.observed_at,
+        unhealthy.observed_at,
+    )
+    assert unhealthy_first.evaluation_times == healthy_first.evaluation_times
+    assert healthy_first.projection_history[: len(healthy_only.projection_history)] == (
+        healthy_only.projection_history
+    )
+    assert (
+        unhealthy_first.projection_history[: len(unhealthy_only.projection_history)]
+        == unhealthy_only.projection_history
+    )
+
+
+def test_conflicting_window_makes_every_hypothesis_ineligible() -> None:
+    incident_facts = facts().model_copy(
+        update={
+            "signals": SignalFacts(
+                request_rate=numeric_evidence(200.0, baseline=100.0, group="load"),
+                cpu_utilization=numeric_evidence(
+                    0.85, baseline=None, group="utilization"
+                ),
+            )
+        }
+    )
+    healthy = observation(observed_at=NOW + timedelta(minutes=1), healthy=True)
+    unhealthy = observation(observed_at=NOW + timedelta(minutes=1), healthy=False)
+    service = GuardianService(InMemoryIncidentStore())
+
+    initial = service.submit_incident(
+        "tenant-a", "request-1", incident_facts, now=NOW + timedelta(minutes=4)
+    )
+    service.append_observation(
+        "tenant-a", "incident-1", healthy, now=NOW + timedelta(minutes=5)
+    )
+    conflicted = service.append_observation(
+        "tenant-a", "incident-1", unhealthy, now=NOW + timedelta(minutes=6)
+    )
+
+    assert any(item.eligible for item in initial.projection.hypotheses)
+    assert all(not item.eligible for item in conflicted.projection.hypotheses)
+    assert conflicted.projection.eligible_actions == ()
+    assert conflicted.projection.permitted_actions == ()
+    assert conflicted.projection.proposed_action is None
+    assert not conflicted.projection.recovery_verified
 
 
 def test_concurrent_conflicting_window_matches_canonical_fail_closed_state() -> None:
@@ -567,19 +640,22 @@ def test_observations_are_append_only_and_reevaluate_history_deterministically()
     def run_sequence():
         service = GuardianService(InMemoryIncidentStore())
         initial = service.submit_incident(
-            "tenant-a", "request-1", incident_facts, now=NOW
+            "tenant-a",
+            "request-1",
+            incident_facts,
+            now=NOW + timedelta(minutes=4),
         )
         first = service.append_observation(
             "tenant-a",
             "incident-1",
             first_observation,
-            now=NOW + timedelta(minutes=1),
+            now=NOW + timedelta(minutes=5),
         )
         second = service.append_observation(
             "tenant-a",
             "incident-1",
             second_observation,
-            now=NOW + timedelta(minutes=2),
+            now=NOW + timedelta(minutes=6),
         )
         return initial, first, second
 
@@ -589,6 +665,17 @@ def test_observations_are_append_only_and_reevaluate_history_deterministically()
     assert initial.observations == ()
     assert first.observations == (first_observation,)
     assert second.observations == (first_observation, second_observation)
+    assert initial.evaluation_times == (incident_facts.observed_at,)
+    assert first.evaluation_times == (
+        incident_facts.observed_at,
+        first_observation.observed_at,
+    )
+    assert second.evaluation_times[: len(first.evaluation_times)] == (
+        first.evaluation_times
+    )
+    assert second.projection_history[: len(first.projection_history)] == (
+        first.projection_history
+    )
     assert len(second.projection_history) == 3
     assert not second.projection_history[1].recovery_verified
     assert second.projection_history[2].recovery_verified

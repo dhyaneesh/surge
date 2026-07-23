@@ -178,7 +178,28 @@ def canonical_incident_snapshot(snapshot: IncidentSnapshot) -> str:
 
     if not isinstance(snapshot, IncidentSnapshot):
         raise TypeError("snapshot must be a validated IncidentSnapshot")
-    return canonical_json(snapshot)
+    observations = tuple(sorted(snapshot.observations, key=_observation_sort_key))
+    conflicts = _observation_conflicts(observations)
+    evaluation_times = (
+        snapshot.facts.observed_at,
+        *(observation.observed_at for observation in observations),
+    )
+    projection_history = replay_incident_history(
+        snapshot.facts,
+        observations,
+        evaluation_times,
+        conflicts,
+    )
+    canonical_snapshot = snapshot.model_copy(
+        update={
+            "observations": observations,
+            "observation_conflicts": conflicts,
+            "evaluation_times": evaluation_times,
+            "projection_history": projection_history,
+            "projection": projection_history[-1],
+        }
+    )
+    return canonical_json(canonical_snapshot)
 
 
 def _observation_identity(observation: ObservationUpdate) -> tuple[str, str, int]:
@@ -251,13 +272,18 @@ def _fail_closed_conflict_projection(
     )
     return projection.model_copy(
         update={
+            "hypotheses": tuple(
+                hypothesis.model_copy(update={"eligible": False})
+                for hypothesis in projection.hypotheses
+            ),
             "incident_class": IncidentClass.TELEMETRY_FAILURE,
             "telemetry_healthy": False,
             "integrity_failures": failures,
             "eligible_actions": (),
-            "permitted_actions": (ActionType.INVESTIGATE, ActionType.ALERT),
+            "permitted_actions": (),
             "forbidden_actions": forbidden,
             "proposed_action": None,
+            "requested_evidence_groups": (),
             "workflow_state": WorkflowState.TELEMETRY_FAILURE,
             "policy_decision": PolicyDecision.DENIED,
             "terminal_reason": "observation-conflict",
@@ -284,12 +310,18 @@ def replay_incident_history(
     if observations and observations[0].observed_at < facts.observed_at:
         raise ObservationOrderError("observation cannot predate incident facts")
     projections = [evaluate_incident(facts, now=evaluation_times[0])]
-    projections.extend(
-        evaluate_incident(facts, now=evaluated_at, observation=observation)
-        for observation, evaluated_at in zip(
-            observations, evaluation_times[1:], strict=True
+    for index, (observation, evaluated_at) in enumerate(
+        zip(observations, evaluation_times[1:], strict=True),
+        start=1,
+    ):
+        projection = evaluate_incident(
+            facts,
+            now=evaluated_at,
+            observation=observation,
         )
-    )
+        if _observation_conflicts(observations[:index]):
+            projection = _fail_closed_conflict_projection(projection)
+        projections.append(projection)
     if conflicts:
         projections[-1] = _fail_closed_conflict_projection(projections[-1])
     return tuple(projections)
@@ -378,7 +410,7 @@ class InMemoryIncidentStore:
                     )
                 stored = existing
             else:
-                evaluation_times = (now,)
+                evaluation_times = (facts.observed_at,)
                 projection_history = self._project(facts, (), evaluation_times, ())
                 stored = IncidentSnapshot(
                     tenant_id=authenticated_tenant,
@@ -433,42 +465,24 @@ class InMemoryIncidentStore:
                 raise ObservationOrderError(
                     "observations must be appended in chronological order"
                 )
-            ordered_entries = sorted(
-                (
-                    *zip(
-                        current.observations,
-                        current.evaluation_times[1:],
-                        strict=True,
-                    ),
-                    (observation, now),
-                ),
-                key=lambda entry: _observation_sort_key(entry[0]),
-            )
-            observations = tuple(item for item, _ in ordered_entries)
+            observations = (*current.observations, observation)
             conflicts = _observation_conflicts(observations)
-            conflicting_identities = {
-                (item.observation_id, item.window_key, item.sequence)
-                for item in conflicts
-            }
-            latest_conflict_evaluation = {
-                identity: max(
-                    evaluated_at
-                    for item, evaluated_at in ordered_entries
-                    if _observation_identity(item) == identity
-                )
-                for identity in conflicting_identities
-            }
             evaluation_times = (
-                current.evaluation_times[0],
-                *(
-                    latest_conflict_evaluation.get(
-                        _observation_identity(item), evaluated_at
-                    )
-                    for item, evaluated_at in ordered_entries
-                ),
+                *current.evaluation_times,
+                observation.observed_at,
             )
-            projection_history = self._project(
+            replayed_history = self._project(
                 current.facts, observations, evaluation_times, conflicts
+            )
+            if replayed_history[: len(current.projection_history)] != (
+                current.projection_history
+            ):
+                raise ProjectionInvariantError(
+                    "projector rewrote persisted projection history"
+                )
+            projection_history = (
+                *current.projection_history,
+                replayed_history[-1],
             )
             replacement = IncidentSnapshot(
                 tenant_id=current.tenant_id,
