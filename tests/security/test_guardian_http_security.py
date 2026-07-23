@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import logging
 from http.client import HTTPConnection
-from threading import Thread
+from threading import Event, Thread
 from typing import Any, cast
 
 import pytest
 
+from apps.guardian_api import __main__ as guardian_main
 from apps.guardian_api.__main__ import parse_runtime_config, run_runtime
 from apps.guardian_api.http import create_server, load_token_tenants
 from apps.guardian_api.service import GuardianService
@@ -53,7 +54,8 @@ def test_body_tenant_cannot_override_authenticated_tenant() -> None:
 
 
 def test_untrusted_tenant_header_cannot_override_token_identity() -> None:
-    with running_server() as server:
+    store = InMemoryIncidentStore()
+    with running_server(service=GuardianService(store)) as server:
         response, body = request(
             server,
             "POST",
@@ -64,8 +66,8 @@ def test_untrusted_tenant_header_cannot_override_token_identity() -> None:
             extra_headers={"X-Guardian-Tenant": "tenant-b"},
         )
         assert response.status == 200
-        assert body["tenant_id"] == "tenant-a"
-        assert body["facts"]["tenant_id"] == "tenant-a"
+        assert set(body) == {"incident_id", "workflow_id", "projection"}
+    assert store.snapshot().incidents[0].facts.tenant_id == "tenant-a"
 
 
 def test_caller_supplied_incident_id_is_rejected() -> None:
@@ -204,6 +206,92 @@ def test_secrets_are_not_echoed_or_logged(caplog: pytest.LogCaptureFixture) -> N
     assert response.status == 400
     assert secret not in rendered
     assert "opaque-a" not in rendered
+
+
+def test_configured_bearer_value_in_valid_input_is_rejected_before_persistence(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret = "valid-looking-secret"
+    payload = incident_payload()
+    payload["identity"]["service_name"] = secret
+    store = InMemoryIncidentStore()
+    caplog.set_level(logging.INFO, logger="guardian.http")
+
+    with running_server(
+        token_tenants={secret: "tenant-a"}, service=GuardianService(store)
+    ) as server:
+        response, body = request(
+            server,
+            "POST",
+            "/v1/incidents",
+            token=secret,
+            idempotency_key="secret-input",
+            payload=payload,
+        )
+
+    rendered = json.dumps(body, sort_keys=True) + caplog.text
+    assert response.status == 400
+    assert body == {"error": "invalid request body"}
+    assert secret not in rendered
+    assert store.snapshot().incidents == ()
+
+
+def test_configured_bearer_value_is_not_persisted_as_an_idempotency_key() -> None:
+    secret = "idempotency-secret"
+    store = InMemoryIncidentStore()
+    with running_server(
+        token_tenants={secret: "tenant-a"}, service=GuardianService(store)
+    ) as server:
+        response, body = request(
+            server,
+            "POST",
+            "/v1/incidents",
+            token=secret,
+            idempotency_key=secret,
+            payload=incident_payload(),
+        )
+
+    assert response.status == 400
+    assert secret not in json.dumps(body)
+    assert store.snapshot().incidents == ()
+    assert store.snapshot().idempotency_count == 0
+
+
+def test_http_snapshot_dto_excludes_raw_incident_and_observation_inputs() -> None:
+    with running_server() as server:
+        created, body = request(
+            server,
+            "POST",
+            "/v1/incidents",
+            token="opaque-a",
+            idempotency_key="minimal-snapshot",
+            payload=incident_payload(),
+        )
+
+    assert created.status == 200
+    assert set(body) == {"incident_id", "workflow_id", "projection"}
+    assert not {"facts", "observations", "projection_history"}.intersection(body)
+
+
+def test_configured_token_value_is_redacted_from_valid_snapshot_and_logs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret = "guardian-rules/v1"
+    caplog.set_level(logging.INFO, logger="guardian.http")
+    with running_server(token_tenants={secret: "tenant-a"}) as server:
+        response, body = request(
+            server,
+            "POST",
+            "/v1/incidents",
+            token=secret,
+            idempotency_key="redacted-output",
+            payload=incident_payload(),
+        )
+
+    rendered = json.dumps(body, sort_keys=True) + caplog.text
+    assert response.status == 200
+    assert body["projection"]["rules_version"] == "[REDACTED]"
+    assert secret not in rendered
 
 
 def test_attacker_controlled_method_is_normalized_in_structured_logs(
@@ -437,3 +525,101 @@ def test_cli_readiness_failure_stops_server_and_joins_thread() -> None:
     with pytest.raises(OSError):
         connection.connect()
     connection.close()
+
+
+class _FailingRuntimeServer:
+    drain_timeout = 0.1
+    listening_address = ("127.0.0.1", 1)
+
+    def __init__(self, serve: Any) -> None:
+        self.serve_forever = serve
+        self.closed = False
+
+    def drain_and_close(self) -> None:
+        self.closed = True
+
+    def server_close(self) -> None:
+        self.closed = True
+
+
+def test_cli_does_not_publish_readiness_when_serving_thread_dies_at_startup() -> None:
+    config = parse_runtime_config(
+        {"GUARDIAN_LOCAL_TOKENS_JSON": '{"opaque-a":"tenant-a"}'},
+        ["--port", "0"],
+    )
+    readiness: list[str] = []
+    server = _FailingRuntimeServer(
+        lambda: (_ for _ in ()).throw(RuntimeError("unexpected serving failure"))
+    )
+
+    with pytest.raises(guardian_main.GuardianServerRuntimeError):
+        run_runtime(
+            config,
+            server_factory=lambda **_kwargs: cast(Any, server),
+            signal_installer=lambda _number, _handler: None,
+            readiness_writer=readiness.append,
+        )
+
+    assert readiness == []
+    assert server.closed
+
+
+def test_cli_surfaces_serving_thread_death_after_readiness() -> None:
+    config = parse_runtime_config(
+        {"GUARDIAN_LOCAL_TOKENS_JSON": '{"opaque-a":"tenant-a"}'},
+        ["--port", "0"],
+    )
+    release = Event()
+    failed = Event()
+    installed_handler: list[Any] = []
+
+    def serve() -> None:
+        assert release.wait(timeout=2)
+        failed.set()
+        raise RuntimeError("unexpected serving failure")
+
+    server = _FailingRuntimeServer(serve)
+
+    def install(_number: int, handler: Any) -> None:
+        installed_handler.append(handler)
+
+    def publish_readiness(_message: str) -> None:
+        release.set()
+        assert failed.wait(timeout=1)
+        installed_handler[0](15, None)
+
+    with pytest.raises(guardian_main.GuardianServerRuntimeError):
+        run_runtime(
+            config,
+            server_factory=lambda **_kwargs: cast(Any, server),
+            signal_installer=install,
+            readiness_writer=publish_readiness,
+        )
+
+    assert server.closed
+
+
+def test_cli_restores_previous_sigterm_handler() -> None:
+    config = parse_runtime_config(
+        {"GUARDIAN_LOCAL_TOKENS_JSON": '{"opaque-a":"tenant-a"}'},
+        ["--port", "0"],
+    )
+    previous_handler = object()
+    installed: list[Any] = []
+
+    def install(_number: int, handler: Any) -> object:
+        installed.append(handler)
+        return previous_handler
+
+    def stop_after_readiness(_message: str) -> None:
+        installed[0](15, None)
+
+    assert (
+        run_runtime(
+            config,
+            signal_installer=install,
+            readiness_writer=stop_after_readiness,
+        )
+        == 0
+    )
+    assert installed[1] is previous_handler

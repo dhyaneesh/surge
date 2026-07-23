@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import selectors
@@ -17,6 +18,8 @@ from threading import Event, Thread
 from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import urlsplit
+
+import pytest
 
 from apps.guardian_api.http import GuardianHTTPServer, create_server
 from apps.guardian_api.models import (
@@ -102,8 +105,11 @@ def observation_payload(
 
 @contextmanager
 def running_server(**kwargs: Any) -> Iterator[GuardianHTTPServer]:
+    token_tenants = kwargs.pop(
+        "token_tenants", {"opaque-a": "tenant-a", "opaque-b": "tenant-b"}
+    )
     server = create_server(
-        token_tenants={"opaque-a": "tenant-a", "opaque-b": "tenant-b"},
+        token_tenants=token_tenants,
         port=0,
         **kwargs,
     )
@@ -193,7 +199,7 @@ def test_health_create_duplicate_observe_and_snapshot_lifecycle() -> None:
             payload=observation_payload(incident_id=incident_id),
         )
         assert observed.status == 200
-        assert len(observed_body["observations"]) == 1
+        assert set(observed_body) == {"incident_id", "workflow_id", "projection"}
 
         snapshot, snapshot_body = request(
             server,
@@ -203,6 +209,80 @@ def test_health_create_duplicate_observe_and_snapshot_lifecycle() -> None:
         )
         assert snapshot.status == 200
         assert snapshot_body == observed_body
+
+
+@pytest.mark.parametrize(
+    "content_length_headers",
+    [
+        b"Content-Length: +0\r\n",
+        b"Content-Length: -0\r\n",
+        b"Content-Length: 1_0\r\n",
+        b"Content-Length: 1, 1\r\n",
+        b"Content-Length: \xd9\xa1\r\n",
+        b"Content-Length: 0\r\nContent-Length: 0\r\n",
+    ],
+)
+def test_content_length_requires_one_ascii_digit_header(
+    content_length_headers: bytes,
+) -> None:
+    with running_server() as server:
+        connection = socket.create_connection(server.listening_address, timeout=1)
+        try:
+            connection.sendall(
+                b"GET /health HTTP/1.1\r\nHost: localhost\r\n"
+                + content_length_headers
+                + b"\r\n"
+            )
+            response = connection.recv(4096)
+        finally:
+            connection.close()
+
+    assert response.startswith(b"HTTP/1.1 400 ")
+    assert b"\r\nContent-Type: application/json\r\n" in response
+
+
+def test_oversized_ascii_content_length_is_rejected_without_integer_overflow() -> None:
+    with running_server() as server:
+        connection = socket.create_connection(server.listening_address, timeout=1)
+        try:
+            connection.sendall(
+                b"GET /health HTTP/1.1\r\nHost: localhost\r\nContent-Length: "
+                + b"9" * 5000
+                + b"\r\n\r\n"
+            )
+            response = connection.recv(4096)
+        finally:
+            connection.close()
+
+    assert response.startswith(b"HTTP/1.1 413 ")
+
+
+def test_partial_body_timeout_is_a_safe_request_timeout(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="guardian.http")
+    with running_server(connection_read_timeout=0.05) as server:
+        connection = socket.create_connection(server.listening_address, timeout=1)
+        try:
+            connection.sendall(
+                b"POST /v1/incidents HTTP/1.1\r\n"
+                b"Host: localhost\r\n"
+                b"Authorization: Bearer opaque-a\r\n"
+                b"Idempotency-Key: partial\r\n"
+                b"Content-Type: application/json\r\n"
+                b"Content-Length: 10\r\n\r\n{"
+            )
+            response_parts = []
+            while part := connection.recv(4096):
+                response_parts.append(part)
+            response = b"".join(response_parts)
+        finally:
+            connection.close()
+
+    assert response.startswith(b"HTTP/1.1 408 ")
+    assert b'{"error":"request timeout"}' in response
+    assert "guardian HTTP request failed safely" not in caplog.text
+    assert all(getattr(record, "http_status", None) != 500 for record in caplog.records)
 
 
 def test_malformed_requests_and_unknown_paths_are_bounded() -> None:
@@ -326,6 +406,45 @@ def test_shutdown_waits_for_active_request_handlers() -> None:
             server.server_close()
         serve_thread.join(timeout=2)
         request_thread.join(timeout=2)
+
+
+def test_request_concurrency_limit_rejects_saturation_then_recovers() -> None:
+    entered = Event()
+    release = Event()
+
+    class BlockingService(GuardianService):
+        def get_incident(self, authenticated_tenant: str, incident_id: str):
+            entered.set()
+            assert release.wait(timeout=3)
+            return super().get_incident(authenticated_tenant, incident_id)
+
+    first_result: list[int] = []
+    with running_server(service=BlockingService(), max_concurrent_requests=1) as server:
+        first = Thread(
+            target=lambda: first_result.append(
+                request(
+                    server,
+                    "GET",
+                    "/v1/incidents/missing/scenario-snapshot",
+                    token="opaque-a",
+                )[0].status
+            )
+        )
+        first.start()
+        assert entered.wait(timeout=1)
+
+        saturated, saturated_body = request(server, "GET", "/health")
+        assert saturated.status == 503
+        assert saturated_body == {"error": "service unavailable"}
+
+        release.set()
+        first.join(timeout=2)
+        recovered, recovered_body = request(server, "GET", "/health")
+        assert recovered.status == 200
+        assert recovered_body == {"status": "ok"}
+
+    assert not first.is_alive()
+    assert first_result == [404]
 
 
 def test_cli_prints_only_readiness_and_shuts_down_cleanly_on_sigterm() -> None:

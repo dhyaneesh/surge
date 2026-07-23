@@ -20,6 +20,10 @@ from apps.guardian_api.http import (
 )
 
 
+class GuardianServerRuntimeError(RuntimeError):
+    """The serving thread exited unexpectedly or could not stop safely."""
+
+
 @dataclass(frozen=True)
 class RuntimeConfig:
     """Validated local runtime settings without credential serialization."""
@@ -112,6 +116,10 @@ def run_runtime(
     thread: Thread | None = None
     thread_started = False
     stopped = Event()
+    serving_entered = Event()
+    serving_failures: list[BaseException] = []
+    previous_sigterm_handler: object | None = None
+    sigterm_handler_installed = False
     try:
         server = server_factory(
             token_tenants=config.token_tenants,
@@ -124,33 +132,73 @@ def run_runtime(
         def request_stop(_signal_number: int, _frame: object) -> None:
             stopped.set()
 
-        signal_installer(signal.SIGTERM, request_stop)
+        previous_sigterm_handler = signal_installer(signal.SIGTERM, request_stop)
+        sigterm_handler_installed = True
+
+        def serve() -> None:
+            serving_entered.set()
+            try:
+                server.serve_forever()
+            except BaseException as error:
+                serving_failures.append(error)
+                stopped.set()
+            else:
+                if not stopped.is_set():
+                    serving_failures.append(
+                        GuardianServerRuntimeError(
+                            "Guardian HTTP serving exited unexpectedly"
+                        )
+                    )
+                    stopped.set()
+
+        def raise_if_serving_failed() -> None:
+            if serving_failures or (
+                thread_started and thread is not None and not thread.is_alive()
+            ):
+                raise GuardianServerRuntimeError(
+                    "Guardian HTTP serving failed"
+                ) from None
+
         thread = thread_factory(
-            target=server.serve_forever,
+            target=serve,
             name="guardian-http",
             daemon=False,
         )
         thread.start()
         thread_started = True
+        if not serving_entered.wait(timeout=0.1):
+            raise GuardianServerRuntimeError(
+                "Guardian HTTP serving did not start within bound"
+            )
+        thread.join(timeout=0.05)
+        raise_if_serving_failed()
         bound_host, bound_port = server.listening_address
         readiness_writer(_readiness_url(bound_host, bound_port))
+        raise_if_serving_failed()
         try:
             while not stopped.wait(0.25):
-                pass
+                raise_if_serving_failed()
         except KeyboardInterrupt:
             stopped.set()
+        raise_if_serving_failed()
         return 0
     finally:
         stopped.set()
-        if server is not None:
-            if thread_started:
-                server.drain_and_close()
-            else:
-                server.server_close()
-        if thread is not None and thread_started and server is not None:
-            thread.join(timeout=server.drain_timeout)
-            if thread.is_alive():
-                raise RuntimeError("Guardian server thread did not stop within bound")
+        try:
+            if server is not None:
+                if thread_started:
+                    server.drain_and_close()
+                else:
+                    server.server_close()
+            if thread is not None and thread_started and server is not None:
+                thread.join(timeout=server.drain_timeout)
+                if thread.is_alive():
+                    raise GuardianServerRuntimeError(
+                        "Guardian server thread did not stop within bound"
+                    )
+        finally:
+            if sigterm_handler_installed:
+                signal_installer(signal.SIGTERM, previous_sigterm_handler)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -14,18 +14,21 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Condition
+from threading import BoundedSemaphore, Condition
 from types import MappingProxyType
 from typing import Any, cast, overload
 from urllib.parse import urlsplit
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from apps.guardian_api.models import (
     SCOPED_IDENTIFIER_PATTERN,
+    GuardianProjection,
     IncidentFacts,
     IncidentSubmission,
     ObservationUpdate,
+    ScopedIdentifier,
+    StrictModel,
 )
 from apps.guardian_api.service import GuardianService, TenantMismatchError
 from apps.guardian_api.store import (
@@ -41,6 +44,7 @@ DEFAULT_PORT = 8080
 DEFAULT_MAX_REQUEST_BODY = 1_048_576
 DEFAULT_CONNECTION_READ_TIMEOUT = 5.0
 DEFAULT_DRAIN_TIMEOUT = 1.0
+DEFAULT_MAX_CONCURRENT_REQUESTS = 32
 
 _LOGGER = logging.getLogger("guardian.http")
 _INCIDENT_PATH = re.compile(
@@ -60,6 +64,7 @@ _ASSIGNED_SECRET = re.compile(
     r"(\s*[:=]\s*)[^\s,;]+"
 )
 _SUPPORTED_HTTP_METHODS = frozenset({"GET", "POST"})
+_SATURATED_BODY = b'{"error":"service unavailable"}'
 
 
 class _DuplicateJSONKey(ValueError):
@@ -88,24 +93,60 @@ def _reject_json_constant(_value: str) -> None:
     raise ValueError
 
 
-def _redact(value: Any) -> Any:
+class HTTPIncidentSnapshot(StrictModel):
+    """Minimal transport DTO that excludes persisted caller and audit inputs."""
+
+    incident_id: ScopedIdentifier
+    workflow_id: str
+    projection: GuardianProjection
+
+
+def _redact_string(value: str, exact_secrets: frozenset[str]) -> str:
+    for secret in sorted(exact_secrets, key=len, reverse=True):
+        value = value.replace(secret, "[REDACTED]")
+    value = _BEARER_VALUE.sub("Bearer [REDACTED]", value)
+    return _ASSIGNED_SECRET.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", value
+    )
+
+
+def _redact(value: Any, *, exact_secrets: frozenset[str] = frozenset()) -> Any:
     if isinstance(value, Mapping):
         return {
-            key: "[REDACTED]" if _SECRET_KEY.search(str(key)) else _redact(item)
+            _redact_string(str(key), exact_secrets): (
+                "[REDACTED]"
+                if _SECRET_KEY.search(str(key))
+                else _redact(item, exact_secrets=exact_secrets)
+            )
             for key, item in value.items()
         }
     if isinstance(value, list | tuple):
-        return [_redact(item) for item in value]
+        return [_redact(item, exact_secrets=exact_secrets) for item in value]
     if isinstance(value, str):
-        value = _BEARER_VALUE.sub("Bearer [REDACTED]", value)
-        return _ASSIGNED_SECRET.sub(
-            lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", value
-        )
+        return _redact_string(value, exact_secrets)
     return value
 
 
-def _normalized_http_method(value: object) -> str:
-    return cast(str, value) if value in _SUPPORTED_HTTP_METHODS else "unsupported"
+def _contains_exact_secret(value: Any, exact_secrets: frozenset[str]) -> bool:
+    if isinstance(value, BaseModel):
+        return _contains_exact_secret(value.model_dump(mode="python"), exact_secrets)
+    if isinstance(value, Mapping):
+        return any(
+            _contains_exact_secret(key, exact_secrets)
+            or _contains_exact_secret(item, exact_secrets)
+            for key, item in value.items()
+        )
+    if isinstance(value, list | tuple | set | frozenset):
+        return any(_contains_exact_secret(item, exact_secrets) for item in value)
+    return isinstance(value, str) and value in exact_secrets
+
+
+def _normalized_http_method(
+    value: object, *, exact_secrets: frozenset[str] = frozenset()
+) -> str:
+    if value in _SUPPORTED_HTTP_METHODS and value not in exact_secrets:
+        return cast(str, value)
+    return "unsupported"
 
 
 def _validated_token_tenants(token_tenants: Mapping[str, str]) -> Mapping[str, str]:
@@ -181,15 +222,52 @@ class GuardianHTTPServer(ThreadingHTTPServer):
         max_request_body: int,
         connection_read_timeout: float,
         drain_timeout: float,
+        max_concurrent_requests: int,
     ) -> None:
         self.token_tenants = token_tenants
+        self.token_values = frozenset(token_tenants)
         self.guardian_service = service
         self.max_request_body = max_request_body
         self.connection_read_timeout = connection_read_timeout
         self.drain_timeout = drain_timeout
+        self.max_concurrent_requests = max_concurrent_requests
+        self._request_slots = BoundedSemaphore(max_concurrent_requests)
         self._connection_condition = Condition()
         self._active_connections: set[socket.socket] = set()
         super().__init__(server_address, GuardianRequestHandler)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if not self._request_slots.acquire(blocking=False):
+            try:
+                response = (
+                    b"HTTP/1.1 503 Service Unavailable\r\n"
+                    b"Content-Type: application/json\r\n"
+                    + f"Content-Length: {len(_SATURATED_BODY)}\r\n".encode("ascii")
+                    + b"Cache-Control: no-store\r\n"
+                    b"X-Content-Type-Options: nosniff\r\n"
+                    b"Connection: close\r\n\r\n" + _SATURATED_BODY
+                )
+                request.sendall(response)
+                _LOGGER.info(
+                    "guardian HTTP request completed",
+                    extra={"http_method": "unsupported", "http_status": 503},
+                )
+            except OSError:
+                pass
+            finally:
+                self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
 
     def get_request(self):
         request, client_address = super().get_request()
@@ -245,6 +323,9 @@ class GuardianHTTPServer(ThreadingHTTPServer):
             if hmac.compare_digest(candidate_bytes, token.encode("ascii")):
                 return tenant
         return None
+
+    def contains_configured_token(self, value: Any) -> bool:
+        return _contains_exact_secret(value, self.token_values)
 
     def handle_error(self, request: Any, client_address: Any) -> None:
         """Suppress SocketServer tracebacks that could contain request secrets."""
@@ -313,7 +394,10 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
         close_connection: bool = False,
     ) -> None:
         body = json.dumps(
-            _redact(payload), sort_keys=True, separators=(",", ":"), allow_nan=False
+            _redact(payload, exact_secrets=self.guardian_server.token_values),
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
         ).encode("utf-8")
         self.send_response_only(status.value)
         self.send_header("Content-Type", "application/json")
@@ -333,7 +417,8 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
             "guardian HTTP request completed",
             extra={
                 "http_method": _normalized_http_method(
-                    getattr(self, "command", "unknown")
+                    getattr(self, "command", "unknown"),
+                    exact_secrets=self.guardian_server.token_values,
                 ),
                 "http_status": status.value,
             },
@@ -376,19 +461,21 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
         if not lengths:
             self._request_content_length = None
             return True
-        try:
-            length = int(lengths[0]) if len(lengths) == 1 else -1
-        except ValueError:
-            length = -1
-        if length < 0:
+        if len(lengths) != 1 or re.fullmatch(r"[0-9]+", lengths[0]) is None:
             self._error(HTTPStatus.BAD_REQUEST, "invalid request body")
             return False
-        if length > self.guardian_server.max_request_body:
+        normalized_length = lengths[0].lstrip("0") or "0"
+        maximum_length = str(self.guardian_server.max_request_body)
+        if len(normalized_length) > len(maximum_length) or (
+            len(normalized_length) == len(maximum_length)
+            and normalized_length > maximum_length
+        ):
             self._error(
                 HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
                 "request body too large",
             )
             return False
+        length = int(normalized_length)
         self._request_content_length = length
         return True
 
@@ -419,6 +506,7 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
             or values[0] != values[0].strip()
             or len(values[0]) > 256
             or any(ord(character) < 33 for character in values[0])
+            or values[0] in self.guardian_server.token_values
         ):
             self._error(HTTPStatus.BAD_REQUEST, "idempotency key required")
             return None
@@ -460,7 +548,18 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
         if length is None or length <= 0:
             self._error(HTTPStatus.BAD_REQUEST, "invalid request body")
             return None
-        raw = self.rfile.read(length)
+        try:
+            raw = self.rfile.read(length)
+        except TimeoutError:
+            try:
+                self._error(
+                    HTTPStatus.REQUEST_TIMEOUT,
+                    "request timeout",
+                    close_connection=True,
+                )
+            except OSError:
+                self.close_connection = True
+            return None
         if len(raw) != length:
             self._error(
                 HTTPStatus.BAD_REQUEST,
@@ -476,7 +575,11 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
             return None
 
     def _snapshot_payload(self, snapshot: IncidentSnapshot) -> dict[str, Any]:
-        return snapshot.model_dump(mode="json")
+        return HTTPIncidentSnapshot(
+            incident_id=snapshot.incident_id,
+            workflow_id=snapshot.workflow_id,
+            projection=snapshot.projection,
+        ).model_dump(mode="json")
 
     def _handle_create(self, tenant: str) -> None:
         idempotency_key = self._idempotency_key()
@@ -484,6 +587,9 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
             return
         submission = self._read_model(IncidentSubmission)
         if submission is None:
+            return
+        if self.guardian_server.contains_configured_token(submission):
+            self._error(HTTPStatus.BAD_REQUEST, "invalid request body")
             return
         if (
             submission.tenant_id != tenant
@@ -506,6 +612,9 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
     def _handle_observation(self, tenant: str, incident_id: str) -> None:
         observation = self._read_model(ObservationUpdate)
         if observation is None:
+            return
+        if self.guardian_server.contains_configured_token(observation):
+            self._error(HTTPStatus.BAD_REQUEST, "invalid request body")
             return
         if observation.tenant_id != tenant:
             self._error(HTTPStatus.FORBIDDEN, "forbidden")
@@ -597,7 +706,10 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
             _LOGGER.error(
                 "guardian HTTP request failed safely",
                 extra={
-                    "http_method": _normalized_http_method(self.command),
+                    "http_method": _normalized_http_method(
+                        self.command,
+                        exact_secrets=self.guardian_server.token_values,
+                    ),
                     "http_status": 500,
                 },
             )
@@ -623,6 +735,7 @@ def create_server(
     max_request_body: int = DEFAULT_MAX_REQUEST_BODY,
     connection_read_timeout: float = DEFAULT_CONNECTION_READ_TIMEOUT,
     drain_timeout: float = DEFAULT_DRAIN_TIMEOUT,
+    max_concurrent_requests: int = DEFAULT_MAX_CONCURRENT_REQUESTS,
     allow_non_loopback: bool = False,
 ) -> GuardianHTTPServer:
     """Create a configured server without starting its request loop."""
@@ -639,6 +752,12 @@ def create_server(
         or max_request_body <= 0
     ):
         raise ValueError("request body limit must be positive")
+    if (
+        not isinstance(max_concurrent_requests, int)
+        or isinstance(max_concurrent_requests, bool)
+        or max_concurrent_requests <= 0
+    ):
+        raise ValueError("request concurrency limit must be positive")
     for name, value in (
         ("connection read timeout", connection_read_timeout),
         ("drain timeout", drain_timeout),
@@ -657,4 +776,5 @@ def create_server(
         max_request_body=max_request_body,
         connection_read_timeout=float(connection_read_timeout),
         drain_timeout=float(drain_timeout),
+        max_concurrent_requests=max_concurrent_requests,
     )
