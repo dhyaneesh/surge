@@ -1261,6 +1261,68 @@ def test_identity_and_evidence_roles_are_explicit_and_digest_is_optional() -> No
     assert evidence.subject_role == identity.target_role
 
 
+def test_role_binding_to_bound_service_name_is_not_an_identity_conflict() -> None:
+    """Role-to-service bindings must not create false identity conflicts.
+
+    ``target_role`` stays the normalized role while workload/service names
+    reflect the bound environment identity (for example checkout).
+    """
+
+    identity = TargetIdentity(
+        target_role="request-processor",
+        environment="otel-demo",
+        namespace="guardian-test",
+        workload_kind="Deployment",
+        workload_name="checkout",
+        service_name="checkout",
+        image_digest=DIGEST_B,
+    )
+    rate = numeric(200, baseline=100, group="load").model_copy(
+        update={
+            "subject_role": "request-processor",
+            "environment": "otel-demo",
+            "namespace": "guardian-test",
+            "workload_kind": "Deployment",
+            "workload_name": "checkout",
+            "service_name": "checkout",
+        }
+    )
+    cpu = numeric(0.85, group="util").model_copy(
+        update={
+            "subject_role": "request-processor",
+            "environment": "otel-demo",
+            "namespace": "guardian-test",
+            "workload_kind": "Deployment",
+            "workload_name": "checkout",
+            "service_name": "checkout",
+        }
+    )
+    projection = evaluate_incident(
+        base_facts(
+            identity=identity,
+            signals=SignalFacts(request_rate=rate, cpu_utilization=cpu),
+        ),
+        now=NOW,
+    )
+    assert (
+        CriticalIntegrityFailure.IDENTITY_CONFLICT not in projection.integrity_failures
+    )
+    assert projection.incident_class is IncidentClass.LOAD_SPIKE
+    assert projection.proposed_action is ActionType.SCALE_UP
+
+    mismatched = evaluate_incident(
+        base_facts(
+            identity=identity,
+            signals=SignalFacts(
+                request_rate=rate.model_copy(update={"service_name": "wrong-service"}),
+                cpu_utilization=cpu,
+            ),
+        ),
+        now=NOW,
+    )
+    assert CriticalIntegrityFailure.IDENTITY_CONFLICT in mismatched.integrity_failures
+
+
 def test_target_role_mismatch_is_an_identity_conflict() -> None:
     payload = numeric(200, baseline=100, group="load").model_dump()
     payload["subject_role"] = "unrelated-role"

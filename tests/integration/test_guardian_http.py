@@ -210,7 +210,14 @@ def test_health_create_duplicate_observe_and_snapshot_lifecycle() -> None:
             token=TOKEN_A,
         )
         assert snapshot.status == 200
-        assert snapshot_body == observed_body
+        assert snapshot_body["incident_id"] == observed_body["incident_id"]
+        assert snapshot_body["workflow_id"] == observed_body["workflow_id"]
+        assert snapshot_body["projection"] == observed_body["projection"]
+        assert "supporting_evidence" in snapshot_body
+        assert "audit_event_counts" in snapshot_body
+        assert snapshot_body["audit_event_counts"].get("observation-recorded", 0) >= 1
+        assert "workflow_states" in snapshot_body
+        assert "safety_gates" in snapshot_body
 
 
 @pytest.mark.parametrize(

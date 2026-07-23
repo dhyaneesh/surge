@@ -105,12 +105,38 @@ def _projection_to_snapshot(envelope: dict[str, Any]) -> GuardianSnapshot:
     actionable = (
         bool(projection.eligible_actions) or projection.proposed_action is not None
     )
+    supporting = envelope.get("supporting_evidence") or ()
+    contradicting = envelope.get("contradicting_evidence") or ()
+    required_fresh = envelope.get("required_fresh_evidence") or ()
+    audit_counts = envelope.get("audit_event_counts") or {}
+    safety_gates = envelope.get("safety_gates") or ()
+    workflow_states = envelope.get("workflow_states") or (
+        projection.workflow_state.value,
+    )
+    parent_count = int(envelope.get("parent_count", 1))
+    proposal_count = int(
+        envelope.get(
+            "proposal_count",
+            1 if projection.proposed_action is not None else 0,
+        )
+    )
+    approval_count = int(envelope.get("approval_count", 0))
+    permitted = envelope.get("permitted_operations") or tuple(
+        item.value for item in projection.permitted_actions
+    )
+    forbidden_ops = envelope.get("forbidden_operations") or tuple(
+        item.value for item in projection.forbidden_actions
+    )
+    mutations = envelope.get("mutations") or ()
     return GuardianSnapshot(
         incident_class=projection.incident_class.value
         if projection.incident_class
         else None,
         actionable=actionable,
         telemetry_quality=telemetry_quality,
+        supporting_evidence=tuple(supporting),
+        contradicting_evidence=tuple(contradicting),
+        required_fresh_evidence=tuple(required_fresh),
         eligible_actions=tuple(
             _action_to_dict(item) for item in projection.eligible_actions
         ),
@@ -124,12 +150,19 @@ def _projection_to_snapshot(envelope: dict[str, Any]) -> GuardianSnapshot:
         ),
         policy_decision=projection.policy_decision.value,
         policy_fail_closed=projection.policy_decision.value == "denied",
-        workflow_states=(projection.workflow_state.value,),
+        policy_bundle_state=envelope.get("policy_bundle_state"),
+        permitted_operations=tuple(permitted),
+        forbidden_operations=tuple(forbidden_ops),
+        workflow_states=tuple(workflow_states),
         terminal_reason=projection.terminal_reason,
-        parent_count=1,
-        proposal_count=1 if projection.proposed_action is not None else 0,
-        approval_count=0,
+        parent_count=parent_count,
+        proposal_count=proposal_count,
+        approval_count=approval_count,
         mutation_count=projection.executed_mutations,
+        mutations=tuple(mutations),
+        audit_event_counts=dict(audit_counts),
+        tenant_isolation=envelope.get("tenant_isolation"),
+        safety_gates=tuple(safety_gates),
         scaler_result=projection.scaler_result.value
         if projection.scaler_result
         else None,

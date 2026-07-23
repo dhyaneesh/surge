@@ -55,3 +55,42 @@ def test_matrix_records_an_environment_that_executes_no_scenarios(
     )
 
     assert summary["emptyEnvironments"] == [SUPPORTED_ENVIRONMENTS[0]]
+
+
+def test_matrix_stops_later_environments_after_invalidation(tmp_path, monkeypatch):
+    calls = []
+
+    async def fake_run(environment, **kwargs):
+        calls.append(environment)
+        if environment == SUPPORTED_ENVIRONMENTS[1]:
+            return SuiteSummary(
+                environment,
+                1,
+                1,
+                0,
+                1,
+                0,
+                (),
+                environment_invalidated=True,
+                reset_completed=False,
+                cleanup_completed=True,
+            )
+        return SuiteSummary(environment, 1, 1, 1, 0, 0, ())
+
+    monkeypatch.setattr("testbeds.scenarios.matrix.run_environment", fake_run)
+
+    summary = asyncio.run(
+        run_matrix(
+            guardian_url="http://guardian.test",
+            artifact_root=tmp_path,
+            scenario_directory=tmp_path,
+        )
+    )
+
+    assert calls == list(SUPPORTED_ENVIRONMENTS[:2])
+    assert summary["environmentInvalidated"] is True
+    assert summary["failed"] >= 1
+    assert any(
+        item["reason"] == "skipped: prior environment invalidated"
+        for item in summary["skipReasons"]
+    )

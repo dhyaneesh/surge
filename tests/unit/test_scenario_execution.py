@@ -382,3 +382,35 @@ def test_cancellation_is_persisted_and_cleanup_still_runs(tmp_path):
     assert adapter.calls[-2:] == ["cleanup", "cleanup"]
     summary = json.loads((result.artifact_directory / "summary.json").read_text())
     assert summary["status"] == "cancelled"
+
+
+class FailingResetAdapter(RecordingAdapter):
+    async def reset(self):
+        self.calls.append("reset")
+        raise RuntimeError("reset failed")
+
+
+def test_reset_failure_invalidates_environment_and_raises(tmp_path):
+    from testbeds.scenarios.execution import EnvironmentInvalidatedError
+
+    scenario = load_guardian_scenario("testbeds/scenarios/healthy-load-no-action.yaml")
+    adapter = FailingResetAdapter()
+
+    with pytest.raises(EnvironmentInvalidatedError) as raised:
+        asyncio.run(
+            ScenarioExecutor(ScriptedGuardianClient(passing_snapshot())).execute(
+                scenario,
+                registration(adapter),
+                ExecutionSettings(tmp_path, baseline_timeout=timedelta(seconds=1)),
+            )
+        )
+
+    result = raised.value.result
+    assert result.environment_invalidated is True
+    assert result.reset_completed is False
+    assert result.cleanup_completed is True
+    assert result.status is ExecutionStatus.FAILED
+    diagnostics = json.loads(
+        (result.artifact_directory / "diagnostics.json").read_text()
+    )
+    assert diagnostics["environmentInvalidated"] is True

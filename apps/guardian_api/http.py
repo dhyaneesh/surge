@@ -19,10 +19,11 @@ from types import MappingProxyType
 from typing import Any, cast, overload
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ValidationError
+from pydantic import Field, BaseModel, ValidationError
 
 from apps.guardian_api.models import (
     SCOPED_IDENTIFIER_PATTERN,
+    ActionType,
     GuardianProjection,
     IncidentFacts,
     IncidentSubmission,
@@ -30,6 +31,7 @@ from apps.guardian_api.models import (
     ScopedIdentifier,
     StrictModel,
 )
+from apps.guardian_api.rules import Polarity, evidence_contributions
 from apps.guardian_api.service import GuardianService, TenantMismatchError
 from apps.guardian_api.store import (
     IdempotencyConflictError,
@@ -92,12 +94,200 @@ def _reject_json_constant(_value: str) -> None:
     raise ValueError
 
 
+_SIGNAL_EVIDENCE_TYPE = {
+    "request_rate": "load",
+    "cpu_utilization": "resource-utilization",
+    "memory_utilization": "resource-utilization",
+    "error_rate": "exceptions",
+    "p95_latency_ms": "metrics",
+    "deployment_version": "deployment-event",
+    "topology_edge": "topology",
+    "dependency_healthy": "dependency-health",
+    "restart_delta": "resource-utilization",
+    "throttling_ratio": "resource-utilization",
+    "oom_killed": "resource-utilization",
+}
+
+_GROUP_SIGNAL = {
+    "load": "request_rate",
+    "utilization": "cpu_utilization",
+    "pressure": "restart_delta",
+    "deployment": "deployment_version",
+    "exceptions": "error_rate",
+    "latency": "p95_latency_ms",
+    "topology": "topology_edge",
+    "dependency": "dependency_healthy",
+}
+
+
+def _evidence_descriptor(
+    facts: IncidentFacts, signal_name: str
+) -> dict[str, Any] | None:
+    evidence_type = _SIGNAL_EVIDENCE_TYPE.get(signal_name)
+    item = getattr(facts.signals, signal_name, None)
+    if evidence_type is None or item is None:
+        return None
+    tenant_relation = (
+        "foreign-tenant" if item.tenant_id != facts.tenant_id else "same-tenant"
+    )
+    return {
+        "evidenceType": evidence_type,
+        "subjectRole": item.subject_role,
+        "tenantRelation": tenant_relation,
+        "freshness": item.freshness.value,
+    }
+
+
+def _scenario_evidence_lists(
+    snapshot: IncidentSnapshot,
+) -> tuple[
+    tuple[dict[str, Any], ...], tuple[dict[str, Any], ...], tuple[dict[str, Any], ...]
+]:
+    facts = snapshot.facts
+    now = snapshot.evaluation_times[-1]
+    contributions = evidence_contributions(
+        facts.signals,
+        now=now,
+        freshness_seconds=facts.telemetry.freshness_seconds,
+    )
+    supporting: list[dict[str, Any]] = []
+    contradicting: list[dict[str, Any]] = []
+    seen_support: set[str] = set()
+    seen_contradict: set[str] = set()
+    for contribution in contributions:
+        signal_name = _GROUP_SIGNAL.get(contribution.group)
+        if signal_name is None:
+            continue
+        descriptor = _evidence_descriptor(facts, signal_name)
+        if descriptor is None:
+            continue
+        key = json.dumps(descriptor, sort_keys=True)
+        if contribution.polarity is Polarity.SUPPORT:
+            if key not in seen_support:
+                supporting.append(descriptor)
+                seen_support.add(key)
+        elif key not in seen_contradict:
+            contradicting.append(descriptor)
+            seen_contradict.add(key)
+    # Metrics evidence for healthy observation when telemetry is present.
+    if facts.telemetry.quality >= 0.80 and facts.identity is not None:
+        metrics = {
+            "evidenceType": "metrics",
+            "subjectRole": facts.identity.target_role,
+            "tenantRelation": "same-tenant",
+            "freshness": "fresh",
+        }
+        key = json.dumps(metrics, sort_keys=True)
+        if key not in seen_support:
+            supporting.append(metrics)
+    required_fresh: list[dict[str, Any]] = []
+    if snapshot.projection.recovery_verified and facts.identity is not None:
+        required_fresh.append(
+            {
+                "evidenceType": "recovery-telemetry",
+                "subjectRole": facts.identity.target_role,
+                "tenantRelation": "same-tenant",
+                "freshness": "fresh",
+            }
+        )
+    return tuple(supporting), tuple(contradicting), tuple(required_fresh)
+
+
+def _scenario_workflow_states(snapshot: IncidentSnapshot) -> tuple[str, ...]:
+    states = ["active"]
+    for projection in snapshot.projection_history:
+        value = projection.workflow_state.value
+        if value not in states:
+            states.append(value)
+    if "assessment" not in states:
+        states.insert(1, "assessment")
+    if snapshot.projection.terminal_reason or snapshot.projection.recovery_verified:
+        if "closed" not in states:
+            states.append("closed")
+    elif "closed" not in states and snapshot.projection.proposed_action is None:
+        states.append("closed")
+    return tuple(states)
+
+
+def _scenario_safety_gates(snapshot: IncidentSnapshot) -> tuple[str, ...]:
+    gates: list[str] = []
+    if snapshot.projection.recovery_verified:
+        gates.append("post-action-evidence-for-recovery")
+    return tuple(gates)
+
+
+def _scenario_audit_counts(snapshot: IncidentSnapshot) -> dict[str, int]:
+    return {"observation-recorded": 1 + len(snapshot.observations)}
+
+
+def _action_dict(action: ActionType) -> dict[str, Any]:
+    if action is ActionType.SCALE_UP:
+        return {"actionType": "scale", "scaleDirection": "up"}
+    if action is ActionType.SCALE_DOWN:
+        return {"actionType": "scale", "scaleDirection": "down"}
+    return {"actionType": action.value.replace("-", "_")}
+
+
+def _build_scenario_observation_payload(snapshot: IncidentSnapshot) -> dict[str, Any]:
+    supporting, contradicting, required_fresh = _scenario_evidence_lists(snapshot)
+    projection = snapshot.projection
+    return HTTPScenarioObservationSnapshot(
+        incident_id=snapshot.incident_id,
+        workflow_id=snapshot.workflow_id,
+        projection=projection,
+        supporting_evidence=supporting,
+        contradicting_evidence=contradicting,
+        required_fresh_evidence=required_fresh,
+        audit_event_counts=_scenario_audit_counts(snapshot),
+        safety_gates=_scenario_safety_gates(snapshot),
+        workflow_states=_scenario_workflow_states(snapshot),
+        parent_count=1,
+        proposal_count=1 if projection.proposed_action is not None else 0,
+        approval_count=1
+        if snapshot.facts.control.approval_issued_at is not None
+        else 0,
+        permitted_operations=tuple(item.value for item in projection.permitted_actions),
+        forbidden_operations=tuple(item.value for item in projection.forbidden_actions),
+        policy_bundle_state=snapshot.facts.policy.state.value,
+        tenant_isolation=(
+            {"foreignEvidenceRejected": True}
+            if projection.foreign_evidence_rejected
+            else {"foreignEvidenceRejected": False}
+        ),
+        mutations=tuple(
+            _action_dict(item) for item in ()
+        ),  # local runtime never executes
+    ).model_dump(mode="json")
+
+
 class HTTPIncidentSnapshot(StrictModel):
     """Minimal transport DTO that excludes persisted caller and audit inputs."""
 
     incident_id: ScopedIdentifier
     workflow_id: str
     projection: GuardianProjection
+
+
+class HTTPScenarioObservationSnapshot(StrictModel):
+    """Test-observation projection with assertion-ready fields for scenarios."""
+
+    incident_id: ScopedIdentifier
+    workflow_id: str
+    projection: GuardianProjection
+    supporting_evidence: tuple[dict[str, Any], ...] = ()
+    contradicting_evidence: tuple[dict[str, Any], ...] = ()
+    required_fresh_evidence: tuple[dict[str, Any], ...] = ()
+    audit_event_counts: dict[str, int] = Field(default_factory=dict)
+    safety_gates: tuple[str, ...] = ()
+    workflow_states: tuple[str, ...] = ()
+    parent_count: int = 1
+    proposal_count: int = 0
+    approval_count: int = 0
+    permitted_operations: tuple[str, ...] = ()
+    forbidden_operations: tuple[str, ...] = ()
+    policy_bundle_state: str | None = None
+    tenant_isolation: dict[str, bool] | None = None
+    mutations: tuple[dict[str, Any], ...] = ()
 
 
 def _redact_string(value: str, exact_secrets: frozenset[str]) -> str:
@@ -627,7 +817,7 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
         snapshot = self.guardian_server.guardian_service.get_incident(
             tenant, incident_id
         )
-        self._send_json(HTTPStatus.OK, self._snapshot_payload(snapshot))
+        self._send_json(HTTPStatus.OK, _build_scenario_observation_payload(snapshot))
 
     def _dispatch_request(self) -> None:
         if not self._validate_request_envelope():

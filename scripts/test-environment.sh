@@ -26,6 +26,11 @@ if [ -z "${GUARDIAN_BASE_URL:-}" ]; then
   exit 2
 fi
 
+if [ -z "${GUARDIAN_SCENARIO_TOKEN:-}" ]; then
+  printf '%s\n' '[prerequisite] test:env: GUARDIAN_SCENARIO_TOKEN is required' >&2
+  exit 2
+fi
+
 for command in kubectl helm curl; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf '[prerequisite] test:env: required command is unavailable: %s\n' "$command" >&2

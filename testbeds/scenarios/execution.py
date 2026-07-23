@@ -8,9 +8,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Sequence
 
 from testbeds.adapters.base import EnvironmentAdapter
+from testbeds.evidence.collector import EvidenceSample, UnavailableEvidence
+from testbeds.evidence.contracts import EvidenceSourceKind
 from testbeds.models import (
     DeploymentSpecification,
     EnvironmentRelease,
@@ -79,6 +81,7 @@ class AdapterRegistration:
     role_bindings: Mapping[str, str]
     fault_role_bindings: Mapping[FaultType, str]
     deployment_bindings: Mapping[str, tuple[str, str]]
+    evidence_samples: tuple[EvidenceSample | UnavailableEvidence, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +108,17 @@ class ExecutionResult:
     artifact_directory: Path
     assertions: tuple[AssertionResult, ...]
     transitions: tuple[StateTransition, ...]
+    reset_completed: bool = False
+    cleanup_completed: bool = False
+    environment_invalidated: bool = False
+
+
+class EnvironmentInvalidatedError(RuntimeError):
+    """Reset or cleanup failed; the disposable environment is no longer usable."""
+
+    def __init__(self, message: str, *, result: ExecutionResult) -> None:
+        super().__init__(message)
+        self.result = result
 
 
 def _control_stimulus(scenario: GuardianScenarioV1Alpha2) -> ControlStimulus:
@@ -120,6 +134,36 @@ def _control_stimulus(scenario: GuardianScenarioV1Alpha2) -> ControlStimulus:
     )
 
 
+def _default_telemetry_sample(observed_at: datetime) -> EvidenceSample:
+    return EvidenceSample(
+        EvidenceSourceKind.SIGNOZ_TELEMETRY,
+        observed_at=observed_at,
+        provenance_ref="signoz/telemetry-quality",
+        values={
+            "quality": 1.0,
+            "usable_samples": 10,
+            "required_samples": 10,
+            "pipeline_available": True,
+            "comparison_valid": True,
+        },
+    )
+
+
+def _evidence_for_context(
+    registration: AdapterRegistration, observed_at: datetime
+) -> tuple[EvidenceSample | UnavailableEvidence, ...]:
+    if registration.evidence_samples:
+        return registration.evidence_samples
+    return (_default_telemetry_sample(observed_at),)
+
+
+def _required_signals(scenario: GuardianScenarioV1Alpha2) -> frozenset[str]:
+    required: set[str] = {"telemetry_quality"}
+    if scenario.spec.stimulus.telemetry is not None:
+        return frozenset(required)
+    return frozenset(required)
+
+
 def _fact_context(
     scenario: GuardianScenarioV1Alpha2,
     registration: AdapterRegistration,
@@ -131,6 +175,7 @@ def _fact_context(
     observed_at: datetime,
     control: ControlStimulus,
     tenant_id: str,
+    evidence_samples: Sequence[EvidenceSample | UnavailableEvidence],
 ) -> FactBuildContext:
     return FactBuildContext(
         tenant_id=tenant_id,
@@ -144,6 +189,8 @@ def _fact_context(
         fault_result=fault_result,
         deployment_result=deployment_result,
         control=control,
+        evidence_samples=tuple(evidence_samples),
+        required_signals=_required_signals(scenario),
     )
 
 
@@ -179,6 +226,9 @@ class ScenarioExecutor:
         installed = False
         operational_error: Exception | None = None
         cancelled = False
+        reset_completed = False
+        cleanup_completed = False
+        environment_invalidated = False
 
         async def bounded(operation):
             return await asyncio.wait_for(
@@ -286,6 +336,7 @@ class ScenarioExecutor:
 
             observed_at = datetime.now(UTC)
             control = _control_stimulus(scenario)
+            evidence_samples = _evidence_for_context(registration, observed_at)
             ctx = _fact_context(
                 scenario,
                 registration,
@@ -298,6 +349,7 @@ class ScenarioExecutor:
                 observed_at=observed_at,
                 control=control,
                 tenant_id=settings.tenant_id,
+                evidence_samples=evidence_samples,
             )
             submission = build_incident_submission(ctx)
             transition(ExecutionState.SUBMITTING_INCIDENT)
@@ -319,6 +371,7 @@ class ScenarioExecutor:
                 self.guardian.observe(submissions[0].incident_id)
             )
             guardian_artifacts.append(initial_snapshot)
+            writer.write("initial-snapshot.json", initial_snapshot)
             initial_results = evaluate_assertions(scenario, initial_snapshot)
             assertions.extend(
                 result
@@ -355,6 +408,7 @@ class ScenarioExecutor:
                         settings.baseline_timeout
                     )
                 )
+                reset_completed = True
                 transition(ExecutionState.VERIFYING_RECOVERY)
                 writer.write("reset.json", {"completed": True})
                 if submissions:
@@ -372,8 +426,10 @@ class ScenarioExecutor:
                         self.guardian.observe(submissions[0].incident_id)
                     )
                     guardian_artifacts.append(fresh_snapshot)
+                    writer.write("recovery-snapshot.json", fresh_snapshot)
             except Exception as exc:
                 operational_error = operational_error or exc
+                environment_invalidated = True
                 assertions.append(
                     AssertionResult(
                         name="reset.restored_baseline",
@@ -407,9 +463,11 @@ class ScenarioExecutor:
                 await bounded(registration.adapter.cleanup())
                 if settings.verify_cleanup_idempotency:
                     await bounded(registration.adapter.cleanup())
+                cleanup_completed = True
                 writer.write("cleanup.json", {"completed": True})
             except Exception as exc:
                 operational_error = operational_error or exc
+                environment_invalidated = True
                 assertions.append(
                     AssertionResult(
                         name="cleanup.completed",
@@ -435,6 +493,9 @@ class ScenarioExecutor:
                     if operational_error
                     else None
                 ),
+                "environmentInvalidated": environment_invalidated,
+                "resetCompleted": reset_completed,
+                "cleanupCompleted": cleanup_completed,
             },
         )
 
@@ -442,6 +503,7 @@ class ScenarioExecutor:
             not cancelled
             and operational_error is None
             and all(item.passed for item in assertions)
+            and not environment_invalidated
         )
         status = (
             ExecutionStatus.CANCELLED
@@ -469,15 +531,27 @@ class ScenarioExecutor:
                 "status": status,
                 "assertionsPassed": sum(item.passed for item in assertions),
                 "assertionsFailed": sum(not item.passed for item in assertions),
+                "resetCompleted": reset_completed,
+                "cleanupCompleted": cleanup_completed,
+                "environmentInvalidated": environment_invalidated,
             },
         )
-        return ExecutionResult(
+        result = ExecutionResult(
             execution_id,
             status,
             writer.directory,
             tuple(assertions),
             tuple(transitions),
+            reset_completed=reset_completed,
+            cleanup_completed=cleanup_completed,
+            environment_invalidated=environment_invalidated,
         )
+        if environment_invalidated:
+            raise EnvironmentInvalidatedError(
+                f"environment invalidated during scenario {scenario.metadata.name}",
+                result=result,
+            )
+        return result
 
     async def _submit_fresh_observation(
         self,
@@ -494,6 +568,7 @@ class ScenarioExecutor:
             return
         fresh_state = await bounded(registration.adapter.observe_state())
         observed_at = datetime.now(UTC)
+        recovery_samples = _evidence_for_context(registration, observed_at)
         observation = build_observation_update(
             ctx,
             incident_id=incident_id,
@@ -503,6 +578,7 @@ class ScenarioExecutor:
             observed_at=observed_at,
             window_started_at=observed_at - timedelta(seconds=30),
             observation_state=fresh_state,
+            evidence_samples=recovery_samples,
         )
         observation_payloads.append(observation)
         guardian_artifacts.append(
