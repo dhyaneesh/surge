@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 
 import pytest
 
+from testbeds.evidence.collector import EvidenceSample
+from testbeds.evidence.contracts import EvidenceSourceKind
 from testbeds.models import (
     EnvironmentRelease,
     EnvironmentState,
@@ -31,6 +33,21 @@ from testbeds.scenarios.guardian_client import (
 
 DIGEST = "sha256:" + "a" * 64
 TOKEN = "guardian_scenario_token_AA_0123456789"
+
+
+def _telemetry_sample(observed_at: datetime) -> EvidenceSample:
+    return EvidenceSample(
+        EvidenceSourceKind.SIGNOZ_TELEMETRY,
+        observed_at=observed_at,
+        provenance_ref="signoz/telemetry-quality",
+        values={
+            "quality": 1.0,
+            "usable_samples": 10,
+            "required_samples": 10,
+            "pipeline_available": True,
+            "comparison_valid": True,
+        },
+    )
 
 
 def test_facts_fail_closed_on_missing_tenant() -> None:
@@ -67,13 +84,14 @@ def test_facts_fail_closed_on_missing_tenant() -> None:
 
 
 def test_facts_never_embed_the_scenario_token() -> None:
+    observed_at = datetime.now(UTC)
     ctx = FactBuildContext(
         tenant_id="tenant-a",
         environment="test",
         target_role="request-processor",
         role_bindings={"request-processor": "transaction-processor"},
         release=EnvironmentRelease(environment="test"),
-        observed_at=datetime.now(UTC),
+        observed_at=observed_at,
         observations=(
             EnvironmentState(
                 environment="test",
@@ -94,6 +112,7 @@ def test_facts_never_embed_the_scenario_token() -> None:
                 healthy=True,
             ),
         ),
+        evidence_samples=(_telemetry_sample(observed_at),),
     )
     submission = build_incident_submission(ctx)
     dump = json.dumps(submission.model_dump(mode="json"))
@@ -102,13 +121,14 @@ def test_facts_never_embed_the_scenario_token() -> None:
 
 
 def test_foreign_tenant_evidence_has_control_provenance() -> None:
+    observed_at = datetime.now(UTC)
     ctx = FactBuildContext(
         tenant_id="tenant-a",
         environment="test",
         target_role="request-processor",
         role_bindings={"request-processor": "transaction-processor"},
         release=EnvironmentRelease(environment="test"),
-        observed_at=datetime.now(UTC),
+        observed_at=observed_at,
         observations=(
             EnvironmentState(
                 environment="test",
@@ -130,6 +150,7 @@ def test_foreign_tenant_evidence_has_control_provenance() -> None:
             ),
         ),
         control=ControlStimulus(foreign_tenant=True),
+        evidence_samples=(_telemetry_sample(observed_at),),
     )
     submission = build_incident_submission(ctx)
     evidence = submission.signals.all_evidence()
