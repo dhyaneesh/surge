@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Thread
@@ -39,6 +40,27 @@ from testbeds.scenarios.loader import load_guardian_scenario
 
 TOKEN = "guardian_local_token_A_0123456789"
 DIGEST = "sha256:" + "a" * 64
+
+
+@dataclass
+class FakeEvidenceProvider:
+    assessment: tuple[EvidenceSample, ...]
+    recovery: tuple[EvidenceSample, ...]
+
+    async def collect_assessment_evidence(self, **kwargs) -> tuple[EvidenceSample, ...]:
+        return self.assessment
+
+    async def collect_recovery_evidence(self, **kwargs) -> tuple[EvidenceSample, ...]:
+        return tuple(
+            EvidenceSample(
+                sample.source_kind,
+                observed_at=datetime.now(UTC),
+                provenance_ref=sample.provenance_ref,
+                values=sample.values,
+                diagnostics=sample.diagnostics,
+            )
+            for sample in self.recovery
+        )
 
 
 def _otel_state(*, namespace: str = "guardian-otel-demo-test") -> EnvironmentState:
@@ -209,8 +231,7 @@ def test_legitimate_demand_scale_up_with_controlled_otel_demo_and_real_api(
         role_bindings={"request-processor": "transaction-processor"},
         fault_role_bindings={},
         deployment_bindings={},
-        evidence_samples=samples,
-        recovery_evidence_samples=recovery,
+        evidence_provider=FakeEvidenceProvider(samples, recovery),
     )
     client = HttpGuardianClient(
         f"http://{server.listening_address[0]}:{server.listening_address[1]}",

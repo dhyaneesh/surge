@@ -117,20 +117,24 @@ design_capabilities:
   - testbeds/evidence/signoz.py
   - testbeds/environments/capabilities.py
   - testbeds/scenarios/compatibility.py
+  - testbeds/scenarios/evidence_provider.py
   - testbeds/scenarios/facts.py
   - testbeds/scenarios/execution.py
   - testbeds/scenarios/environment_suite.py
   - testbeds/scenarios/matrix.py
   tests:
   - tests/unit/test_evidence_collector.py
+  - tests/unit/test_evidence_provider.py
   - tests/unit/test_scenario_compatibility.py
   - tests/unit/test_scenario_catalog.py
   - tests/contract/test_environment_capability_declarations.py
+  - tests/contract/test_scenario_execution_contract.py
   - tests/unit/test_scenario_facts.py
   - tests/unit/test_scenario_execution.py
   - tests/unit/test_scenario_matrix.py
   - tests/integration/test_scenario_guardian_lifecycle.py
   - tests/integration/test_legitimate_demand_scale_up.py
+  - tests/integration/test_live_evidence_lifecycle.py
   - tests/unit/test_guardian_domain.py
   status: implemented
 requirements:

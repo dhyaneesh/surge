@@ -1,12 +1,13 @@
 import asyncio
 import copy
 import json
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from testbeds.environments.capabilities import ENVIRONMENT_DECLARATIONS
-from testbeds.evidence.collector import EvidenceSample
+from testbeds.evidence.collector import EvidenceSample, UnavailableEvidence
 from testbeds.evidence.contracts import EvidenceSourceKind
 from testbeds.models import (
     BaselineState,
@@ -34,6 +35,41 @@ from tests.unit.test_guardian_scenario_v1alpha2 import document
 DIGEST = "sha256:" + "a" * 64
 
 
+@dataclass
+class FakeEvidenceProvider:
+    assessment: tuple[EvidenceSample | UnavailableEvidence, ...]
+    recovery: tuple[EvidenceSample | UnavailableEvidence, ...]
+    assessment_calls: int = 0
+    recovery_calls: int = 0
+    events: list[str] = field(default_factory=list)
+    assessment_after_stimulus: bool = False
+
+    async def collect_assessment_evidence(self, **kwargs):
+        self.assessment_calls += 1
+        self.events.append("assessment-evidence")
+        self.assessment_after_stimulus = (
+            "load:10" in kwargs["registration"].adapter.calls
+        )
+        return self.assessment
+
+    async def collect_recovery_evidence(self, **kwargs):
+        self.recovery_calls += 1
+        self.events.append("recovery-evidence")
+        return self.recovery
+
+
+class TracingGuardianClient(ScriptedGuardianClient):
+    def __init__(self, snapshot, events):
+        super().__init__(snapshot)
+        self.events = events
+
+    async def submit_incident(self, submission, *, idempotency_key):
+        self.events.append("incident-submit")
+        return await super().submit_incident(
+            submission, idempotency_key=idempotency_key
+        )
+
+
 def _telemetry_samples(
     observed_at: datetime | None = None,
 ) -> tuple[EvidenceSample, ...]:
@@ -57,8 +93,9 @@ def _telemetry_samples(
 class RecordingAdapter:
     capabilities = EnvironmentCapabilities(adjustable_load=True)
 
-    def __init__(self):
+    def __init__(self, lifecycle_events: list[str] | None = None):
         self.calls = []
+        self.lifecycle_events = lifecycle_events
         self.namespace = "guardian-test"
 
     async def install(self, release):
@@ -80,9 +117,14 @@ class RecordingAdapter:
 
     async def reset(self):
         self.calls.append("reset")
+        if self.lifecycle_events is not None:
+            self.lifecycle_events.append("reset")
 
     async def wait_for_healthy_baseline(self, timeout) -> BaselineState:
         self.calls.append("baseline")
+        if self.lifecycle_events is not None:
+            event = "post-reset-baseline" if "reset" in self.calls else "baseline"
+            self.lifecycle_events.append(event)
         return BaselineState(True, environment=EnvironmentState(healthy=True))
 
     async def apply_load(self, profile):
@@ -129,7 +171,7 @@ class BlockingAdapter(RecordingAdapter):
         raise RuntimeError("unreachable")
 
 
-def registration(adapter, declaration=None, evidence_samples=None):
+def registration(adapter, declaration=None, evidence_provider=None):
     return AdapterRegistration(
         environment="otel-demo",
         adapter=adapter,
@@ -138,10 +180,10 @@ def registration(adapter, declaration=None, evidence_samples=None):
         role_bindings={"request-processor": "transaction-processor"},
         fault_role_bindings={},
         deployment_bindings={},
-        evidence_samples=(
-            tuple(evidence_samples)
-            if evidence_samples is not None
-            else _telemetry_samples()
+        evidence_provider=evidence_provider
+        or FakeEvidenceProvider(
+            assessment=_telemetry_samples(),
+            recovery=_telemetry_samples(),
         ),
     )
 
@@ -317,7 +359,59 @@ def test_executor_orders_lifecycle_and_persists_redacted_artifacts(tmp_path):
         "deployment-results.json",
         "incident-payloads.json",
         "diagnostics.json",
+        "assessment-evidence.json",
+        "recovery-evidence.json",
     } <= {path.name for path in result.artifact_directory.glob("*.json")}
+
+
+def test_executor_collects_assessment_evidence_after_stimulus_before_submission(
+    tmp_path,
+):
+    scenario = load_guardian_scenario("testbeds/scenarios/healthy-load-no-action.yaml")
+    adapter = RecordingAdapter()
+    events: list[str] = []
+    provider = FakeEvidenceProvider(
+        assessment=_telemetry_samples(),
+        recovery=_telemetry_samples(),
+        events=events,
+    )
+
+    result = asyncio.run(
+        ScenarioExecutor(TracingGuardianClient(passing_snapshot(), events)).execute(
+            scenario,
+            registration(adapter, evidence_provider=provider),
+            ExecutionSettings(tmp_path, baseline_timeout=timedelta(seconds=1)),
+        )
+    )
+
+    assert result.status is ExecutionStatus.PASSED
+    assert provider.assessment_calls == 1
+    assert provider.assessment_after_stimulus is True
+    assert events.index("assessment-evidence") < events.index("incident-submit")
+
+
+def test_executor_collects_recovery_evidence_after_reset(tmp_path):
+    scenario = load_guardian_scenario("testbeds/scenarios/healthy-load-no-action.yaml")
+    events: list[str] = []
+    adapter = RecordingAdapter(lifecycle_events=events)
+    provider = FakeEvidenceProvider(
+        assessment=_telemetry_samples(),
+        recovery=_telemetry_samples(),
+        events=events,
+    )
+
+    result = asyncio.run(
+        ScenarioExecutor(ScriptedGuardianClient(passing_snapshot())).execute(
+            scenario,
+            registration(adapter, evidence_provider=provider),
+            ExecutionSettings(tmp_path, baseline_timeout=timedelta(seconds=1)),
+        )
+    )
+
+    assert result.status is ExecutionStatus.PASSED
+    assert provider.recovery_calls == 1
+    assert events.index("reset") < events.index("post-reset-baseline")
+    assert events.index("post-reset-baseline") < events.index("recovery-evidence")
 
 
 def test_failed_assertion_returns_failed_status_and_still_resets_and_cleans(tmp_path):
@@ -443,15 +537,16 @@ def test_reset_failure_invalidates_environment_and_raises(tmp_path):
     assert diagnostics["environmentInvalidated"] is True
 
 
-def test_executor_fails_closed_when_evidence_samples_are_empty(tmp_path):
-    """Empty registration evidence must not fabricate healthy telemetry samples."""
+def test_executor_fails_closed_when_assessment_evidence_is_empty(tmp_path):
+    """An empty provider result must not fabricate healthy telemetry samples."""
 
     scenario = load_guardian_scenario("testbeds/scenarios/healthy-load-no-action.yaml")
     adapter = RecordingAdapter()
+    provider = FakeEvidenceProvider(assessment=(), recovery=_telemetry_samples())
     result = asyncio.run(
         ScenarioExecutor(ScriptedGuardianClient(passing_snapshot())).execute(
             scenario,
-            registration(adapter, evidence_samples=()),
+            registration(adapter, evidence_provider=provider),
             ExecutionSettings(tmp_path, baseline_timeout=timedelta(seconds=1)),
         )
     )
@@ -467,6 +562,49 @@ def test_executor_fails_closed_when_evidence_samples_are_empty(tmp_path):
         (result.artifact_directory / "incident-payloads.json").read_text()
     )
     assert payloads == []
+
+
+def test_executor_fails_closed_when_assessment_evidence_omits_required_signals(
+    tmp_path,
+):
+    scenario = load_guardian_scenario(
+        "testbeds/scenarios/legitimate-demand-scale-up.yaml"
+    )
+    adapter = RecordingAdapter()
+    provider = FakeEvidenceProvider(
+        assessment=_telemetry_samples(),
+        recovery=_telemetry_samples(),
+    )
+
+    result = asyncio.run(
+        ScenarioExecutor(ScriptedGuardianClient(passing_snapshot())).execute(
+            scenario,
+            registration(adapter, evidence_provider=provider),
+            ExecutionSettings(tmp_path, baseline_timeout=timedelta(seconds=1)),
+        )
+    )
+
+    assert result.status is ExecutionStatus.FAILED
+    assert provider.assessment_calls == 1
+    error = next(item for item in result.assertions if item.name == "execution.error")
+    assert "MissingEvidenceError" in str(error.actual)
+    payloads = json.loads(
+        (result.artifact_directory / "incident-payloads.json").read_text()
+    )
+    assert payloads == []
+
+
+def test_adapter_registration_requires_evidence_provider():
+    with pytest.raises(TypeError, match="evidence_provider"):
+        AdapterRegistration(
+            environment="otel-demo",
+            adapter=RecordingAdapter(),
+            release=EnvironmentRelease(environment="otel-demo"),
+            declaration=ENVIRONMENT_DECLARATIONS["otel-demo"],
+            role_bindings={"request-processor": "transaction-processor"},
+            fault_role_bindings={},
+            deployment_bindings={},
+        )  # type: ignore[call-arg]
 
 
 def test_required_signals_include_scenario_supporting_evidence_groups() -> None:

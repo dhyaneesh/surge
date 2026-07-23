@@ -8,6 +8,7 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from testbeds.environments.capabilities import ENVIRONMENT_DECLARATIONS
 from testbeds.scenarios.compatibility import CompatibilityStatus, derive_compatibility
 from testbeds.scenarios.execution import (
     EnvironmentInvalidatedError,
@@ -41,9 +42,10 @@ class SuiteSummary:
 def select_scenarios(
     environment: str, directory: Path
 ) -> tuple[tuple[Path, ...], tuple[str, ...]]:
-    registration = build_adapter_registration(
-        environment, workspace=directory / ".selection", run_id="selection"
-    )
+    try:
+        declaration = ENVIRONMENT_DECLARATIONS[environment]
+    except KeyError as exc:
+        raise ValueError(f"unknown environment {environment!r}") from exc
     selected: list[Path] = []
     skipped: list[str] = []
     for path in sorted(directory.glob("*.yaml")):
@@ -56,7 +58,7 @@ def select_scenarios(
         if environment not in scenario.spec.candidate_environments:
             skipped.append(f"{scenario.metadata.name}: environment is not a candidate")
             continue
-        compatibility = derive_compatibility(scenario, registration.declaration)
+        compatibility = derive_compatibility(scenario, declaration)
         if compatibility.status is not CompatibilityStatus.SUPPORTED:
             missing = ",".join(
                 item.value for item in compatibility.missing_capabilities
