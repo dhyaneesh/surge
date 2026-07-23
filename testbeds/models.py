@@ -82,6 +82,21 @@ class RolloutState:
 
 
 @dataclass(frozen=True, slots=True)
+class ScalingState:
+    """Normalized state exposed by an autoscaling test environment."""
+
+    scaled_object_ready: bool = False
+    current_replicas: int = 0
+    desired_replicas: int = 0
+    queue_depth: int | None = None
+    scaler_active: bool = False
+    scaler_error: bool = False
+    scale_to_zero: bool = False
+    minimum_replicas: int = 0
+    maximum_replicas: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class EnvironmentState:
     environment: str = ""
     namespace: str = ""
@@ -93,6 +108,7 @@ class EnvironmentState:
     contaminated: bool = False
     changed_resources: tuple[ChangedResource, ...] = ()
     diagnostics: tuple[DiagnosticArtifactReference, ...] = ()
+    scaling: ScalingState | None = None
 
 
 @dataclass(frozen=True, slots=True)

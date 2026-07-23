@@ -4,6 +4,10 @@ obligations:
   immutable_release: {implementation: testbeds/environments/keda_rabbitmq.py, tests: [test_release_is_immutable_and_adapter_isolated]}
   namespace_isolation: {implementation: testbeds/adapters/keda_rabbitmq.py, tests: [test_release_is_immutable_and_adapter_isolated]}
   healthy_baseline: {implementation: testbeds/adapters/keda_rabbitmq.py, tests: [test_observation_baseline_load_fault_reset_and_cleanup_are_deterministic]}
+  statefulset_identity: {implementation: testbeds/adapters/keda_rabbitmq.py, tests: [test_real_cluster_install_baseline_load_fault_reset_and_cleanup]}
+  scaled_object_lifecycle: {implementation: testbeds/adapters/keda_rabbitmq.py, tests: [test_install_pins_rabbitmq_digest_and_creates_scaled_object, test_observation_baseline_load_fault_reset_and_cleanup_are_deterministic]}
+  deterministic_queue_load: {implementation: testbeds/adapters/keda_rabbitmq.py, tests: [test_apply_load_uses_requested_message_count]}
+  scaler_observation: {implementation: testbeds/adapters/keda_rabbitmq.py, tests: [test_observation_baseline_load_fault_reset_and_cleanup_are_deterministic]}
   deterministic_reset: {implementation: testbeds/adapters/keda_rabbitmq.py, tests: [test_observation_baseline_load_fault_reset_and_cleanup_are_deterministic]}
   specified_faults: {implementation: testbeds/adapters/keda_rabbitmq.py, tests: [test_observation_baseline_load_fault_reset_and_cleanup_are_deterministic]}
   normalized_observation: {implementation: testbeds/adapters/keda_rabbitmq.py, tests: [test_observation_baseline_load_fault_reset_and_cleanup_are_deterministic]}
