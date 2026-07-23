@@ -1,0 +1,28 @@
+clickhouse:
+  persistence:
+    enabled: false
+  replicas: 1
+  resources:
+    requests: {cpu: 100m, memory: 200Mi}
+    limits: {cpu: 500m, memory: 1200Mi}
+zookeeper:
+  replicaCount: 1
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 384Mi}
+signoz:
+  persistence:
+    enabled: false
+  replicaCount: 1
+  resources:
+    requests: {cpu: 100m, memory: 100Mi}
+    limits: {cpu: 500m, memory: 384Mi}
+otelCollector:
+  replicaCount: 1
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+  serviceMonitor:
+    enabled: false
+  selfTelemetry:
+    enabled: false

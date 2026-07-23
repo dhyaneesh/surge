@@ -168,6 +168,22 @@ tasks:
       - "{{.PREFLIGHT}} test:matrix"
       - ./scripts/test-matrix.sh
 
+  local:up:
+    desc: Create KinD, install deps, start Guardian, write run env
+    cmds:
+      - ./scripts/local-up.sh
+
+  local:down:
+    desc: Stop Guardian and delete run-owned KinD cluster
+    cmds:
+      - ./scripts/local-down.sh
+
+  test:phase0:
+    desc: Phase 0 proof against a live local:up stack (one env E2E)
+    cmds:
+      - "{{.PREFLIGHT}} test:phase0"
+      - ./scripts/test-phase0.sh
+
   requirements:render:
     desc: Regenerate requirement coverage and dependency graph
     cmds:

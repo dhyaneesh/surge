@@ -159,9 +159,11 @@ def test_manifest_targets_declare_dependencies_and_capabilities() -> None:
         assert set(target["dependencies"]) <= active_dependencies, name
         assert set(target["capabilities"]) <= set(capabilities), name
 
-    assert {name: target["capabilities"] for name, target in targets.items()} == {
-        name: [name] for name in MANDATORY_TARGETS
-    }
+    assert {
+        name: target["capabilities"]
+        for name, target in targets.items()
+        if name in MANDATORY_TARGETS
+    } == {name: [name] for name in MANDATORY_TARGETS}
 
     baseline_targets = {
         "test:action-controller",
@@ -187,6 +189,7 @@ def test_manifest_targets_declare_dependencies_and_capabilities() -> None:
 
     for name in ("test:replay", "test:replay-deterministic"):
         assert targets[name]["dependencies"] == ["task", "uv", "pytest"]
+    assert targets["test:phase0"]["dependencies"] == ["task", "uv", "pytest"]
 
 
 def test_tools_directory_is_ignored() -> None:
@@ -243,8 +246,8 @@ def test_baseline_document_covers_every_target_and_no_green_rule() -> None:
     baseline = (ROOT / "docs/verification-baseline.md").read_text(encoding="utf-8")
     taskfile_targets = set(load_yaml(ROOT / "Taskfile.yml")["tasks"])
 
-    assert taskfile_targets == MANDATORY_TARGETS
-    for target in taskfile_targets:
+    assert MANDATORY_TARGETS <= taskfile_targets
+    for target in MANDATORY_TARGETS:
         assert f"`{target}`" in baseline, target
     assert "must not be called green" in baseline
     assert "fail; they do not pass or skip" in baseline
@@ -504,6 +507,26 @@ def test_taskfile_matrix_runs_preflight_before_matrix_entrypoint() -> None:
     assert commands[1] == "./scripts/test-matrix.sh"
 
 
+def test_taskfile_exposes_phase0_local_stack_orchestration() -> None:
+    tasks = load_yaml(ROOT / "Taskfile.yml")["tasks"]
+
+    assert tasks["local:up"] == {
+        "desc": "Create KinD, install deps, start Guardian, write run env",
+        "cmds": ["./scripts/local-up.sh"],
+    }
+    assert tasks["local:down"] == {
+        "desc": "Stop Guardian and delete run-owned KinD cluster",
+        "cmds": ["./scripts/local-down.sh"],
+    }
+    assert tasks["test:phase0"] == {
+        "desc": "Phase 0 proof against a live local:up stack (one env E2E)",
+        "cmds": [
+            "{{.PREFLIGHT}} test:phase0",
+            "./scripts/test-phase0.sh",
+        ],
+    }
+
+
 def task_command_text(command: object) -> str:
     if isinstance(command, str):
         return command
@@ -520,7 +543,7 @@ def test_taskfile_uses_local_uv_and_preflights_before_work() -> None:
     }
 
     for name, task in taskfile["tasks"].items():
-        if name == "bootstrap":
+        if name in {"bootstrap", "local:up", "local:down"}:
             continue
         commands = task["cmds"]
         first = task_command_text(commands[0])

@@ -75,6 +75,9 @@ capabilities:
   test:requirements: {availability: active}
   test:env: {availability: active}
   test:matrix: {availability: active}
+  local:up: {availability: active}
+  local:down: {availability: active}
+  test:phase0: {availability: active}
   requirements:render: {availability: active}
   requirements:check: {availability: active}
   final: {availability: active}
@@ -119,6 +122,9 @@ targets:
   test:requirements: {dependencies: [task, uv], capabilities: [test:requirements]}
   test:env: {dependencies: [], capabilities: [test:env]}
   test:matrix: {dependencies: [uv], capabilities: [test:matrix]}
+  local:up: {dependencies: [], capabilities: [local:up]}
+  local:down: {dependencies: [], capabilities: [local:down]}
+  test:phase0: {dependencies: [task, uv, pytest], capabilities: [test:phase0]}
   requirements:render: {dependencies: [task, uv], capabilities: [requirements:render]}
   requirements:check: {dependencies: [task, uv], capabilities: [requirements:check]}
   final:
