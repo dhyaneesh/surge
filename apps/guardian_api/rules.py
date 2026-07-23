@@ -9,6 +9,7 @@ from enum import StrEnum
 from apps.guardian_api.models import (
     EvidenceFact,
     EvidenceFreshness,
+    EvidenceSource,
     HypothesisName,
     HypothesisScore,
     SignalFacts,
@@ -52,13 +53,42 @@ HYPOTHESIS_GROUPS: dict[HypothesisName, tuple[frozenset[str], ...]] = {
     ),
 }
 
+INDEPENDENT_TELEMETRY_SOURCES = frozenset(
+    {EvidenceSource.QUERY_CONTRACT, EvidenceSource.ADAPTER_OBSERVATION}
+)
+ALLOWED_SOURCES_BY_SIGNAL = {
+    "request_rate": INDEPENDENT_TELEMETRY_SOURCES,
+    "cpu_utilization": INDEPENDENT_TELEMETRY_SOURCES,
+    "memory_utilization": INDEPENDENT_TELEMETRY_SOURCES,
+    "throttling_ratio": INDEPENDENT_TELEMETRY_SOURCES,
+    "error_rate": INDEPENDENT_TELEMETRY_SOURCES,
+    "p95_latency_ms": INDEPENDENT_TELEMETRY_SOURCES,
+    "oom_killed": INDEPENDENT_TELEMETRY_SOURCES | {EvidenceSource.CONTROL_PLANE},
+    "restart_delta": INDEPENDENT_TELEMETRY_SOURCES | {EvidenceSource.CONTROL_PLANE},
+    "deployment_version": frozenset(
+        {
+            EvidenceSource.ADAPTER_OBSERVATION,
+            EvidenceSource.CONTROL_PLANE,
+            EvidenceSource.DEPLOYMENT_EVENT,
+        }
+    ),
+    "topology_edge": INDEPENDENT_TELEMETRY_SOURCES | {EvidenceSource.CONTROL_PLANE},
+    "dependency_healthy": INDEPENDENT_TELEMETRY_SOURCES
+    | {EvidenceSource.CONTROL_PLANE},
+}
+
 
 def _fresh(
-    evidence: EvidenceFact | None, *, now: datetime, freshness_seconds: int
+    signal_name: str,
+    evidence: EvidenceFact | None,
+    *,
+    now: datetime,
+    freshness_seconds: int,
 ) -> bool:
     return (
         evidence is not None
         and evidence.freshness is EvidenceFreshness.FRESH
+        and evidence.source in ALLOWED_SOURCES_BY_SIGNAL[signal_name]
         and evidence.observed_at <= now
         and now - evidence.observed_at <= timedelta(seconds=freshness_seconds)
     )
@@ -90,7 +120,7 @@ def evidence_contributions(
     output: list[Contribution] = []
     rate = signals.request_rate
     if (
-        _fresh(rate, now=now, freshness_seconds=freshness_seconds)
+        _fresh("request_rate", rate, now=now, freshness_seconds=freshness_seconds)
         and rate is not None
         and rate.baseline_value is not None
     ):
@@ -101,11 +131,17 @@ def evidence_contributions(
 
     utilization = []
     if signals.cpu_utilization is not None and _fresh(
-        signals.cpu_utilization, now=now, freshness_seconds=freshness_seconds
+        "cpu_utilization",
+        signals.cpu_utilization,
+        now=now,
+        freshness_seconds=freshness_seconds,
     ):
         utilization.append(signals.cpu_utilization)
     if signals.memory_utilization is not None and _fresh(
-        signals.memory_utilization, now=now, freshness_seconds=freshness_seconds
+        "memory_utilization",
+        signals.memory_utilization,
+        now=now,
+        freshness_seconds=freshness_seconds,
     ):
         utilization.append(signals.memory_utilization)
     for item in utilization:
@@ -115,21 +151,26 @@ def evidence_contributions(
     pressure: list[EvidenceFact] = []
     throttling = signals.throttling_ratio
     if (
-        _fresh(throttling, now=now, freshness_seconds=freshness_seconds)
+        _fresh(
+            "throttling_ratio",
+            throttling,
+            now=now,
+            freshness_seconds=freshness_seconds,
+        )
         and throttling is not None
         and throttling.value >= 0.20
     ):
         pressure.append(throttling)
     oom = signals.oom_killed
     if (
-        _fresh(oom, now=now, freshness_seconds=freshness_seconds)
+        _fresh("oom_killed", oom, now=now, freshness_seconds=freshness_seconds)
         and oom is not None
         and oom.value
     ):
         pressure.append(oom)
     restarts = signals.restart_delta
     if (
-        _fresh(restarts, now=now, freshness_seconds=freshness_seconds)
+        _fresh("restart_delta", restarts, now=now, freshness_seconds=freshness_seconds)
         and restarts is not None
         and restarts.value >= 1
     ):
@@ -149,7 +190,12 @@ def evidence_contributions(
 
     deployment = signals.deployment_version
     if (
-        _fresh(deployment, now=now, freshness_seconds=freshness_seconds)
+        _fresh(
+            "deployment_version",
+            deployment,
+            now=now,
+            freshness_seconds=freshness_seconds,
+        )
         and deployment is not None
     ):
         polarity = (
@@ -161,7 +207,7 @@ def evidence_contributions(
 
     errors = signals.error_rate
     if (
-        _fresh(errors, now=now, freshness_seconds=freshness_seconds)
+        _fresh("error_rate", errors, now=now, freshness_seconds=freshness_seconds)
         and errors is not None
         and errors.baseline_value is not None
     ):
@@ -170,7 +216,12 @@ def evidence_contributions(
 
     latency = signals.p95_latency_ms
     if (
-        _fresh(latency, now=now, freshness_seconds=freshness_seconds)
+        _fresh(
+            "p95_latency_ms",
+            latency,
+            now=now,
+            freshness_seconds=freshness_seconds,
+        )
         and latency is not None
         and latency.baseline_value is not None
     ):
@@ -182,7 +233,7 @@ def evidence_contributions(
 
     topology = signals.topology_edge
     if (
-        _fresh(topology, now=now, freshness_seconds=freshness_seconds)
+        _fresh("topology_edge", topology, now=now, freshness_seconds=freshness_seconds)
         and topology is not None
         and topology.value
     ):
@@ -190,7 +241,12 @@ def evidence_contributions(
 
     dependency = signals.dependency_healthy
     if (
-        _fresh(dependency, now=now, freshness_seconds=freshness_seconds)
+        _fresh(
+            "dependency_healthy",
+            dependency,
+            now=now,
+            freshness_seconds=freshness_seconds,
+        )
         and dependency is not None
     ):
         _add(

@@ -51,7 +51,11 @@ TARGET_CORRELATED_SIGNALS = {
 
 
 def _integrity_failures(
-    telemetry: TelemetryFacts, *, identity_resolved: bool, now: datetime
+    telemetry: TelemetryFacts,
+    *,
+    identity_resolved: bool,
+    observed_at: datetime,
+    now: datetime,
 ) -> tuple[CriticalIntegrityFailure, ...]:
     failures: list[CriticalIntegrityFailure] = []
     if not identity_resolved:
@@ -62,7 +66,11 @@ def _integrity_failures(
         seconds=2 * telemetry.freshness_seconds
     ):
         failures.append(CriticalIntegrityFailure.SAMPLE_STALE)
-    if telemetry.timestamp_skew_seconds > 60:
+    if (
+        telemetry.newest_required_sample_at - observed_at > timedelta(seconds=60)
+        or telemetry.newest_required_sample_at - now > timedelta(seconds=60)
+        or observed_at - now > timedelta(seconds=60)
+    ):
         failures.append(CriticalIntegrityFailure.TIMESTAMP_SKEW)
     if telemetry.usable_sample_count == 0:
         failures.append(CriticalIntegrityFailure.ZERO_SAMPLES)
@@ -128,15 +136,22 @@ def _recovery_verified(
         or observation.incident_id != facts.incident_id
         or observation.observed_at <= completed
         or observation.window_started_at <= completed
+        or observation.window_started_at > observation.observed_at
+        or observation.window_started_at > now
         or observation.telemetry.newest_required_sample_at
         < observation.window_started_at
+        or observation.telemetry.newest_required_sample_at > observation.observed_at
+        or observation.telemetry.newest_required_sample_at > now
         or observation.observed_at > now
         or not observation.service_healthy
         or not observation.required_conditions_satisfied
     ):
         return False
     failures = _integrity_failures(
-        observation.telemetry, identity_resolved=facts.identity is not None, now=now
+        observation.telemetry,
+        identity_resolved=facts.identity is not None,
+        observed_at=observation.observed_at,
+        now=now,
     )
     return observation.telemetry.quality >= 0.80 and not failures
 
@@ -151,7 +166,10 @@ def evaluate_incident(
 
     identity_resolved = facts.identity is not None
     failures = _integrity_failures(
-        facts.telemetry, identity_resolved=identity_resolved, now=now
+        facts.telemetry,
+        identity_resolved=identity_resolved,
+        observed_at=facts.observed_at,
+        now=now,
     )
     for failure in _evidence_integrity_failures(facts):
         if failure not in failures:

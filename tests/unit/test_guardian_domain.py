@@ -58,6 +58,7 @@ def numeric(
     confidence: float = 1.0,
     tenant: str = "tenant-a",
     subject_role: str = "request-processor",
+    source: EvidenceSource = EvidenceSource.QUERY_CONTRACT,
 ) -> NumericEvidence:
     expected_samples = 10_000
     return NumericEvidence(
@@ -67,7 +68,7 @@ def numeric(
         baseline_value=baseline,
         observed_at=NOW,
         freshness=EvidenceFreshness.FRESH,
-        source=EvidenceSource.QUERY_CONTRACT,
+        source=source,
         provenance_ref="query-contract/sample",
         independence_group=group,
         expected_samples=expected_samples,
@@ -129,7 +130,6 @@ def base_facts(**changes: object) -> IncidentFacts:
             quality=1.0,
             newest_required_sample_at=NOW,
             freshness_seconds=60,
-            timestamp_skew_seconds=0,
             required_sample_count=10,
             usable_sample_count=10,
             pipeline_available=True,
@@ -205,6 +205,26 @@ def test_supported_hypotheses_are_deterministically_eligible(
     assert hypothesis.evidence_confidence >= 0.85
     assert projection.incident_class == IncidentClass(expected.value)
     assert projection.executed_mutations == 0
+
+
+def test_fault_execution_record_cannot_supply_exception_symptom() -> None:
+    projection = evaluate_incident(
+        base_facts(
+            signals=SignalFacts(
+                deployment_version=version(),
+                error_rate=numeric(
+                    0.10,
+                    baseline=0.01,
+                    group="errors",
+                    source=EvidenceSource.FAULT_EXECUTION,
+                ),
+            )
+        ),
+        now=NOW,
+    )
+    hypothesis = score(projection, HypothesisName.DEPLOYMENT_REGRESSION)
+    assert not hypothesis.eligible
+    assert projection.proposed_action is not ActionType.ROLLBACK
 
 
 def test_independence_group_contributes_only_once() -> None:
@@ -322,7 +342,6 @@ def test_zero_samples_on_candidate_evidence_is_critical() -> None:
                     quality=1,
                     newest_required_sample_at=NOW - timedelta(seconds=121),
                     freshness_seconds=60,
-                    timestamp_skew_seconds=0,
                     required_sample_count=10,
                     usable_sample_count=10,
                     pipeline_available=True,
@@ -335,9 +354,8 @@ def test_zero_samples_on_candidate_evidence_is_critical() -> None:
             {
                 "telemetry": TelemetryFacts(
                     quality=1,
-                    newest_required_sample_at=NOW,
+                    newest_required_sample_at=NOW + timedelta(seconds=61),
                     freshness_seconds=60,
-                    timestamp_skew_seconds=61,
                     required_sample_count=10,
                     usable_sample_count=10,
                     pipeline_available=True,
@@ -352,7 +370,6 @@ def test_zero_samples_on_candidate_evidence_is_critical() -> None:
                     quality=1,
                     newest_required_sample_at=NOW,
                     freshness_seconds=60,
-                    timestamp_skew_seconds=0,
                     required_sample_count=10,
                     usable_sample_count=0,
                     pipeline_available=True,
@@ -735,6 +752,17 @@ def test_fresh_later_observation_can_verify_recovery() -> None:
         facts, now=NOW, observation=repackaged
     ).recovery_verified
 
+    future_sample = update.model_copy(
+        update={
+            "telemetry": update.telemetry.model_copy(
+                update={"newest_required_sample_at": NOW + timedelta(seconds=1)}
+            )
+        }
+    )
+    assert not evaluate_incident(
+        facts, now=NOW, observation=future_sample
+    ).recovery_verified
+
 
 def test_foreign_assessment_evidence_cannot_verify_recovery() -> None:
     facts = base_facts(
@@ -796,6 +824,68 @@ def test_models_reject_scenario_fields_naive_time_and_mutable_identity() -> None
     evidence_payload["value"] = "1"
     with pytest.raises(ValidationError):
         NumericEvidence.model_validate(evidence_payload)
+
+
+def test_numeric_evidence_rejects_negative_values_and_baselines() -> None:
+    payload = numeric(1, baseline=1).model_dump()
+    payload["value"] = -0.01
+    with pytest.raises(ValidationError):
+        NumericEvidence.model_validate(payload)
+    payload["value"] = 1.0
+    payload["baseline_value"] = -0.01
+    with pytest.raises(ValidationError):
+        NumericEvidence.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "cpu_utilization",
+        "memory_utilization",
+        "throttling_ratio",
+        "error_rate",
+    ],
+)
+def test_ratio_signals_reject_values_above_one(field: str) -> None:
+    with pytest.raises(ValidationError):
+        SignalFacts.model_validate({field: numeric(1.01).model_dump()})
+
+
+def test_timestamp_skew_is_derived_from_sample_time() -> None:
+    telemetry = base_facts().telemetry.model_copy(
+        update={"newest_required_sample_at": NOW + timedelta(seconds=61)}
+    )
+    projection = evaluate_incident(base_facts(telemetry=telemetry), now=NOW)
+    assert projection.incident_class is IncidentClass.TELEMETRY_FAILURE
+    assert CriticalIntegrityFailure.TIMESTAMP_SKEW in projection.integrity_failures
+
+
+def test_observation_window_and_samples_cannot_be_future_relative_to_envelope() -> None:
+    telemetry = base_facts().telemetry
+    with pytest.raises(ValidationError):
+        ObservationUpdate(
+            tenant_id="tenant-a",
+            incident_id="incident-1",
+            observed_at=NOW,
+            window_started_at=NOW + timedelta(seconds=1),
+            telemetry=telemetry,
+            service_healthy=True,
+            required_conditions_satisfied=True,
+            provenance_ref="recovery/invalid-window",
+        )
+    with pytest.raises(ValidationError):
+        ObservationUpdate(
+            tenant_id="tenant-a",
+            incident_id="incident-1",
+            observed_at=NOW,
+            window_started_at=NOW - timedelta(seconds=1),
+            telemetry=telemetry.model_copy(
+                update={"newest_required_sample_at": NOW + timedelta(seconds=1)}
+            ),
+            service_healthy=True,
+            required_conditions_satisfied=True,
+            provenance_ref="recovery/invalid-sample",
+        )
 
 
 @pytest.mark.parametrize(

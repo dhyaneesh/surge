@@ -151,8 +151,8 @@ EvidenceBase = EvidenceFact
 
 
 class NumericEvidence(EvidenceFact):
-    value: float = Field(allow_inf_nan=False)
-    baseline_value: float | None = Field(default=None, allow_inf_nan=False)
+    value: NonNegativeFloat
+    baseline_value: NonNegativeFloat | None = None
 
 
 class BooleanEvidence(EvidenceFact):
@@ -168,7 +168,6 @@ class TelemetryFacts(StrictModel):
     quality: UnitFloat
     newest_required_sample_at: AwareDatetime
     freshness_seconds: int = Field(gt=0)
-    timestamp_skew_seconds: NonNegativeFloat
     required_sample_count: int = Field(ge=1)
     usable_sample_count: int = Field(ge=0)
     pipeline_available: bool
@@ -243,6 +242,23 @@ class SignalFacts(StrictModel):
     topology_edge: BooleanEvidence | None = None
     dependency_healthy: BooleanEvidence | None = None
 
+    @model_validator(mode="after")
+    def ratios_are_bounded(self) -> Self:
+        for name in (
+            "cpu_utilization",
+            "memory_utilization",
+            "throttling_ratio",
+            "error_rate",
+        ):
+            evidence = getattr(self, name)
+            if evidence is not None and (
+                evidence.value > 1
+                or evidence.baseline_value is not None
+                and evidence.baseline_value > 1
+            ):
+                raise ValueError(f"{name} values must be within [0, 1]")
+        return self
+
     def evidence_items(self) -> tuple[tuple[str, EvidenceFact], ...]:
         return tuple(
             (name, value)
@@ -281,6 +297,14 @@ class ObservationUpdate(StrictModel):
     service_healthy: bool
     required_conditions_satisfied: bool
     provenance_ref: NonEmptyString
+
+    @model_validator(mode="after")
+    def observation_times_are_ordered(self) -> Self:
+        if self.window_started_at > self.observed_at:
+            raise ValueError("observation window cannot start in the future")
+        if self.telemetry.newest_required_sample_at > self.observed_at:
+            raise ValueError("telemetry sample cannot be newer than its observation")
+        return self
 
 
 class HypothesisScore(StrictModel):
