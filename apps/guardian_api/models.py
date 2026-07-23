@@ -58,6 +58,7 @@ class CriticalIntegrityFailure(StrEnum):
 
 
 class RequiredSignal(StrEnum):
+    TELEMETRY_QUALITY = "telemetry_quality"
     REQUEST_RATE = "request_rate"
     CPU_UTILIZATION = "cpu_utilization"
     MEMORY_UTILIZATION = "memory_utilization"
@@ -156,6 +157,12 @@ class EvidenceFact(StrictModel):
     expected_samples: int = Field(ge=1)
     usable_samples: int = Field(ge=0)
 
+    @model_validator(mode="after")
+    def sample_counts_are_consistent(self) -> Self:
+        if self.usable_samples > self.expected_samples:
+            raise ValueError("usable samples cannot exceed expected samples")
+        return self
+
     @property
     def usable_confidence(self) -> float:
         return min(1.0, self.usable_samples / self.expected_samples)
@@ -174,6 +181,13 @@ class BooleanEvidence(EvidenceFact):
 
 
 class VersionEvidence(EvidenceFact):
+    environment: NonEmptyString
+    namespace: NonEmptyString
+    workload_kind: NonEmptyString
+    workload_name: NonEmptyString
+    service_name: NonEmptyString
+    previous_service_version: NonEmptyString | None = None
+    current_service_version: NonEmptyString | None = None
     previous_digest: ImageDigest
     current_digest: ImageDigest
 
@@ -189,6 +203,12 @@ class TelemetryFacts(StrictModel):
     pipeline_available: bool
     comparison_valid: bool
     identity_conflict: bool = False
+
+    @model_validator(mode="after")
+    def sample_counts_are_consistent(self) -> Self:
+        if self.usable_sample_count > self.required_sample_count:
+            raise ValueError("usable samples cannot exceed required samples")
+        return self
 
 
 class EvidencePass(StrictModel):
@@ -300,6 +320,12 @@ class IncidentFacts(StrictModel):
     control: ControlFacts
     scaler: ScalerFacts | None = None
 
+    @model_validator(mode="after")
+    def required_signal_contract_is_nonempty(self) -> Self:
+        if not self.telemetry.required_signals:
+            raise ValueError("executable incident facts require a signal contract")
+        return self
+
 
 class ObservationUpdate(StrictModel):
     schema_version: Literal["guardian.observation-update/v1"] = (
@@ -341,6 +367,7 @@ class GuardianProjection(StrictModel):
     integrity_failures: tuple[CriticalIntegrityFailure, ...]
     hypotheses: tuple[HypothesisScore, ...]
     eligible_actions: tuple[ActionType, ...]
+    permitted_actions: tuple[ActionType, ...]
     forbidden_actions: tuple[ActionType, ...]
     proposed_action: ActionType | None
     workflow_state: WorkflowState

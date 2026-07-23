@@ -293,6 +293,25 @@ def _check_source(
                     f"Guardian application imports model client {reference.module!r}",
                     "Keep classification, eligibility, policy, and action gates deterministic.",
                 )
+            if _provider_import(reference):
+                _add(
+                    violations,
+                    "ARCH-GUARDIAN-NO-ACTION-PROVIDER",
+                    relative,
+                    reference.line,
+                    "Guardian application imports an action or mutation provider",
+                    "Keep execution providers behind the dedicated action controller.",
+                )
+        if tree is not None:
+            for line in _python_write_client_lines(tree, imports):
+                _add(
+                    violations,
+                    "ARCH-GUARDIAN-NO-WRITE-CLIENT",
+                    relative,
+                    line,
+                    "Guardian application imports or initializes a write-capable Kubernetes client",
+                    "Remove Kubernetes write credentials and delegate execution to the action controller.",
+                )
     for reference in imports:
         if _module_matches(reference.module, MCP_CLIENT_MODULES):
             _add(

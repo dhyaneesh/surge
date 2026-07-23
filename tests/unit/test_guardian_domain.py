@@ -1,13 +1,4 @@
-"""Unit contracts for the deterministic Guardian incident evaluator.
-
-Traceability markers: TST-GRD-REA-001-UNIT, TST-GRD-REA-002-UNIT,
-TST-GRD-REA-003-UNIT, TST-GRD-REA-006-UNIT, TST-GRD-REA-007-UNIT,
-TST-GRD-CLS-001-UNIT, TST-GRD-CLS-002-UNIT, TST-GRD-CLS-003-UNIT,
-TST-GRD-CLS-004-UNIT, TST-GRD-CLS-005-UNIT, TST-GRD-CLS-006-UNIT,
-TST-GRD-ACT-001-UNIT, TST-GRD-ACT-002-UNIT, TST-GRD-ACT-003-UNIT,
-TST-GRD-ACT-004-UNIT, TST-GRD-ACT-005-UNIT, TST-GRD-TTL-003-UNIT,
-TST-GRD-TTL-004-UNIT, TST-GRD-TTL-005-UNIT, TST-GRD-TTL-006-UNIT.
-"""
+"""Unit contracts for the deterministic Guardian incident evaluator."""
 
 from __future__ import annotations
 
@@ -101,6 +92,11 @@ def version(previous: str = DIGEST_A, current: str = DIGEST_B) -> VersionEvidenc
     return VersionEvidence(
         tenant_id="tenant-a",
         subject_role="request-processor",
+        environment="production",
+        namespace="payments",
+        workload_kind="Deployment",
+        workload_name="processor",
+        service_name="processor",
         previous_digest=previous,
         current_digest=current,
         observed_at=NOW,
@@ -125,13 +121,15 @@ def base_facts(**changes: object) -> IncidentFacts:
             workload_kind="Deployment",
             workload_name="processor",
             service_name="processor",
-            image_digest=DIGEST_A,
+            image_digest=DIGEST_B,
         ),
         "telemetry": TelemetryFacts(
             quality=1.0,
             newest_required_sample_at=NOW,
             freshness_seconds=60,
-            required_signals=frozenset(),
+            required_signals=frozenset(
+                {guardian_models.RequiredSignal.TELEMETRY_QUALITY}
+            ),
             clock_skew_seconds=0,
             required_sample_count=10,
             usable_sample_count=10,
@@ -202,12 +200,156 @@ def test_healthy_elevated_load_has_no_action() -> None:
 def test_supported_hypotheses_are_deterministically_eligible(
     signals: SignalFacts, expected: HypothesisName
 ) -> None:
+    """TST-GRD-REA-001-UNIT; TST-GRD-REA-002-UNIT; TST-GRD-REA-003-UNIT."""
     projection = evaluate_incident(base_facts(signals=signals), now=NOW)
     hypothesis = score(projection, expected)
     assert hypothesis.eligible
     assert hypothesis.evidence_confidence >= 0.85
     assert projection.incident_class == IncidentClass(expected.value)
     assert projection.executed_mutations == 0
+
+
+def test_rollback_requires_correlated_version_identity() -> None:
+    identity = base_facts().identity
+    assert identity is not None
+    unresolved = identity.model_copy(
+        update={"image_digest": None, "service_version": None}
+    )
+    projection = evaluate_incident(
+        base_facts(
+            identity=unresolved,
+            signals=SignalFacts(
+                deployment_version=version(),
+                error_rate=numeric(0.05, baseline=0.01, group="errors"),
+            ),
+        ),
+        now=NOW,
+    )
+    assert projection.incident_class is IncidentClass.TELEMETRY_FAILURE
+    assert projection.proposed_action is not ActionType.ROLLBACK
+
+    conflicting = evaluate_incident(
+        base_facts(
+            signals=SignalFacts(
+                deployment_version=version().model_copy(
+                    update={"environment": "staging"}
+                ),
+                error_rate=numeric(0.05, baseline=0.01, group="errors"),
+            )
+        ),
+        now=NOW,
+    )
+    assert conflicting.incident_class is IncidentClass.TELEMETRY_FAILURE
+    assert CriticalIntegrityFailure.IDENTITY_CONFLICT in conflicting.integrity_failures
+
+    version_only_identity = identity.model_copy(
+        update={"image_digest": None, "service_version": "v2"}
+    )
+    uncorrelated_version = evaluate_incident(
+        base_facts(
+            identity=version_only_identity,
+            signals=SignalFacts(
+                deployment_version=version().model_copy(
+                    update={"current_service_version": "v3"}
+                ),
+                error_rate=numeric(0.05, baseline=0.01, group="errors"),
+            ),
+        ),
+        now=NOW,
+    )
+    assert uncorrelated_version.incident_class is IncidentClass.TELEMETRY_FAILURE
+
+    dual_identity = identity.model_copy(update={"service_version": "v2"})
+    dual_conflict = evaluate_incident(
+        base_facts(
+            identity=dual_identity,
+            signals=SignalFacts(
+                deployment_version=version().model_copy(
+                    update={"current_service_version": "v3"}
+                ),
+                error_rate=numeric(0.05, baseline=0.01, group="errors"),
+            ),
+        ),
+        now=NOW,
+    )
+    assert dual_conflict.incident_class is IncidentClass.TELEMETRY_FAILURE
+
+
+def test_optional_conflicting_or_future_evidence_fails_closed() -> None:
+    conflicting = numeric(1).model_copy(
+        update={"freshness": EvidenceFreshness.CONFLICTING}
+    )
+    future = numeric(1).model_copy(update={"observed_at": NOW + timedelta(seconds=61)})
+    for signals in (
+        SignalFacts(request_rate=conflicting),
+        SignalFacts(request_rate=future),
+    ):
+        projection = evaluate_incident(base_facts(signals=signals), now=NOW)
+        assert projection.incident_class is IncidentClass.TELEMETRY_FAILURE
+
+
+def test_sample_counts_cannot_exceed_expected() -> None:
+    payload = numeric(1).model_dump()
+    payload["usable_samples"] = payload["expected_samples"] + 1
+    with pytest.raises(ValidationError):
+        NumericEvidence.model_validate(payload)
+    telemetry = base_facts().telemetry.model_copy(
+        update={"usable_sample_count": 11, "required_sample_count": 10}
+    )
+    with pytest.raises(ValidationError):
+        TelemetryFacts.model_validate(telemetry.model_dump())
+
+
+def test_policy_from_future_and_naive_evaluation_time_fail_closed() -> None:
+    signals = SignalFacts(
+        request_rate=numeric(200, baseline=100, group="load"),
+        cpu_utilization=numeric(0.85, group="util"),
+    )
+    future_policy = evaluate_incident(
+        base_facts(
+            signals=signals,
+            policy=PolicyFacts(
+                state=PolicyState.FRESH,
+                evaluated_at=NOW + timedelta(seconds=1),
+            ),
+        ),
+        now=NOW,
+    )
+    assert future_policy.proposed_action is None
+    with pytest.raises(ValueError, match="timezone-aware"):
+        evaluate_incident(base_facts(signals=signals), now=NOW.replace(tzinfo=None))
+
+
+def test_score_lead_above_point_zero_three_is_final() -> None:
+    """TST-GRD-REA-006-UNIT."""
+    projection = evaluate_incident(
+        base_facts(
+            signals=SignalFacts(
+                request_rate=numeric(200, baseline=100, group="load"),
+                cpu_utilization=numeric(0.85, group="util"),
+                throttling_ratio=numeric(0.20, group="pressure"),
+            )
+        ),
+        now=NOW,
+    )
+    assert score(projection, HypothesisName.LOAD_SPIKE).deterministic_score == 0.8
+    assert (
+        score(projection, HypothesisName.RESOURCE_SATURATION).deterministic_score
+        == 0.75
+    )
+    assert projection.workflow_state is WorkflowState.CLASSIFIED
+
+
+def test_telemetry_failure_action_allowlist_is_non_mutating() -> None:
+    """TST-GRD-CLS-005-UNIT."""
+    telemetry = base_facts().telemetry.model_copy(update={"pipeline_available": False})
+    projection = evaluate_incident(base_facts(telemetry=telemetry), now=NOW)
+    assert set(projection.permitted_actions) == {
+        ActionType.INVESTIGATE,
+        ActionType.ALERT,
+        ActionType.SCALER_PAUSE,
+    }
+    assert ActionType.PROTECT_DEPENDENCY in projection.forbidden_actions
 
 
 def test_fault_execution_record_cannot_supply_exception_symptom() -> None:
@@ -231,6 +373,7 @@ def test_fault_execution_record_cannot_supply_exception_symptom() -> None:
 
 
 def test_independence_group_contributes_only_once() -> None:
+    """TST-GRD-REA-007-UNIT."""
     signals = SignalFacts(
         cpu_utilization=numeric(0.90, group="same-scrape"),
         memory_utilization=numeric(0.90, group="same-scrape"),
@@ -362,6 +505,13 @@ def test_required_signal_set_uses_a_typed_enum() -> None:
     assert telemetry.required_signals == frozenset({required_signal.REQUEST_RATE})
 
 
+def test_executable_incident_rejects_empty_required_signal_contract() -> None:
+    payload = base_facts().model_dump()
+    payload["telemetry"]["required_signals"] = frozenset()
+    with pytest.raises(ValidationError):
+        IncidentFacts.model_validate(payload)
+
+
 def test_required_signal_marked_missing_is_not_present() -> None:
     required_signal = guardian_models.RequiredSignal
     telemetry = base_facts().telemetry.model_copy(
@@ -418,7 +568,9 @@ def test_required_signal_more_than_sixty_seconds_in_future_has_clock_skew() -> N
                     quality=1,
                     newest_required_sample_at=NOW - timedelta(seconds=121),
                     freshness_seconds=60,
-                    required_signals=frozenset(),
+                    required_signals=frozenset(
+                        {guardian_models.RequiredSignal.TELEMETRY_QUALITY}
+                    ),
                     clock_skew_seconds=0,
                     required_sample_count=10,
                     usable_sample_count=10,
@@ -434,7 +586,9 @@ def test_required_signal_more_than_sixty_seconds_in_future_has_clock_skew() -> N
                     quality=1,
                     newest_required_sample_at=NOW + timedelta(seconds=61),
                     freshness_seconds=60,
-                    required_signals=frozenset(),
+                    required_signals=frozenset(
+                        {guardian_models.RequiredSignal.TELEMETRY_QUALITY}
+                    ),
                     clock_skew_seconds=0,
                     required_sample_count=10,
                     usable_sample_count=10,
@@ -450,7 +604,9 @@ def test_required_signal_more_than_sixty_seconds_in_future_has_clock_skew() -> N
                     quality=1,
                     newest_required_sample_at=NOW,
                     freshness_seconds=60,
-                    required_signals=frozenset(),
+                    required_signals=frozenset(
+                        {guardian_models.RequiredSignal.TELEMETRY_QUALITY}
+                    ),
                     clock_skew_seconds=0,
                     required_sample_count=10,
                     usable_sample_count=0,
@@ -465,6 +621,7 @@ def test_required_signal_more_than_sixty_seconds_in_future_has_clock_skew() -> N
 def test_critical_telemetry_failure_precedes_causal_hypotheses(
     changes: dict[str, object], failure: CriticalIntegrityFailure
 ) -> None:
+    """TST-GRD-CLS-001-UNIT; TST-GRD-CLS-002-UNIT; TST-GRD-CLS-003-UNIT."""
     changes["signals"] = SignalFacts(
         request_rate=numeric(200, baseline=100, group="load"),
         cpu_utilization=numeric(0.85, group="util"),
@@ -485,6 +642,7 @@ def test_quality_boundary_is_healthy_at_point_eight() -> None:
 
 
 def test_unknown_requires_two_passes_or_ten_minutes() -> None:
+    """TST-GRD-CLS-004-UNIT; TST-GRD-CLS-006-UNIT."""
     initial = evaluate_incident(
         base_facts(
             evidence_pass=EvidencePass(
@@ -545,6 +703,7 @@ def test_remaining_critical_integrity_statuses_fail_closed(
 
 
 def test_mutually_exclusive_actions_enter_conflict_resolution() -> None:
+    """TST-GRD-ACT-001-UNIT; TST-GRD-ACT-002-UNIT; TST-GRD-ACT-005-UNIT."""
     signals = SignalFacts(
         request_rate=numeric(200, baseline=100, group="load"),
         cpu_utilization=numeric(0.85, group="util"),
@@ -604,6 +763,7 @@ def test_near_tied_same_action_hypotheses_do_not_select_without_model() -> None:
 
 
 def test_conflict_collects_discriminatory_evidence_before_budget_exhaustion() -> None:
+    """TST-GRD-ACT-003-UNIT; TST-GRD-ACT-004-UNIT."""
     signals = SignalFacts(
         request_rate=numeric(200, baseline=100, group="load"),
         cpu_utilization=numeric(0.85, group="util"),
@@ -661,6 +821,7 @@ def test_policy_is_fail_closed_and_must_be_recent() -> None:
 
 
 def test_policy_is_rechecked_against_execution_start() -> None:
+    """TST-GRD-TTL-006-UNIT."""
     projection = evaluate_incident(
         base_facts(
             signals=SignalFacts(
@@ -676,6 +837,7 @@ def test_policy_is_rechecked_against_execution_start() -> None:
 
 
 def test_proposal_and_approval_expiry_cannot_be_revived() -> None:
+    """TST-GRD-TTL-003-UNIT; TST-GRD-TTL-005-UNIT."""
     signals = SignalFacts(
         request_rate=numeric(200, baseline=100, group="load"),
         cpu_utilization=numeric(0.85, group="util"),
@@ -700,6 +862,7 @@ def test_proposal_and_approval_expiry_cannot_be_revived() -> None:
 
 
 def test_approval_nonce_is_valid_for_at_most_five_minutes() -> None:
+    """TST-GRD-TTL-004-UNIT."""
     projection = evaluate_incident(
         base_facts(
             signals=SignalFacts(
@@ -1026,7 +1189,8 @@ def test_evidence_confidence_is_derived_only_from_sample_counts() -> None:
         NumericEvidence.model_validate(payload)
     del payload["confidence"]
     payload["usable_samples"] = 5
-    assert NumericEvidence.model_validate(payload).usable_confidence == 1.0
+    with pytest.raises(ValidationError):
+        NumericEvidence.model_validate(payload)
 
 
 def test_identity_and_evidence_roles_are_explicit_and_digest_is_optional() -> None:

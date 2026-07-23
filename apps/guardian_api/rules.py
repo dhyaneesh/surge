@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 
 from apps.guardian_api.models import (
+    ActionType,
     EvidenceFact,
     EvidenceFreshness,
     EvidenceSource,
@@ -51,6 +52,18 @@ HYPOTHESIS_GROUPS: dict[HypothesisName, tuple[frozenset[str], ...]] = {
         frozenset({"topology"}),
         frozenset({"dependency"}),
     ),
+}
+ACTION_BY_HYPOTHESIS = {
+    HypothesisName.LOAD_SPIKE: ActionType.SCALE_UP,
+    HypothesisName.DEPLOYMENT_REGRESSION: ActionType.ROLLBACK,
+    HypothesisName.RESOURCE_SATURATION: ActionType.SCALE_UP,
+    HypothesisName.DEPENDENCY_FAILURE: ActionType.PROTECT_DEPENDENCY,
+}
+EVIDENCE_GROUPS_BY_HYPOTHESIS = {
+    HypothesisName.LOAD_SPIKE: ("load", "utilization"),
+    HypothesisName.DEPLOYMENT_REGRESSION: ("deployment", "exceptions|latency"),
+    HypothesisName.RESOURCE_SATURATION: ("pressure", "utilization"),
+    HypothesisName.DEPENDENCY_FAILURE: ("dependency", "topology"),
 }
 
 INDEPENDENT_TELEMETRY_SOURCES = frozenset(

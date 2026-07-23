@@ -9,7 +9,6 @@ from apps.guardian_api.models import (
     CriticalIntegrityFailure,
     EvidenceFreshness,
     GuardianProjection,
-    HypothesisName,
     IncidentClass,
     IncidentFacts,
     IncidentSeverity,
@@ -20,22 +19,12 @@ from apps.guardian_api.models import (
     TelemetryFacts,
     WorkflowState,
 )
-from apps.guardian_api.rules import ALLOWED_SOURCES_BY_SIGNAL, score_hypotheses
-
-
-ACTION_BY_HYPOTHESIS = {
-    HypothesisName.LOAD_SPIKE: ActionType.SCALE_UP,
-    HypothesisName.DEPLOYMENT_REGRESSION: ActionType.ROLLBACK,
-    HypothesisName.RESOURCE_SATURATION: ActionType.SCALE_UP,
-    HypothesisName.DEPENDENCY_FAILURE: ActionType.PROTECT_DEPENDENCY,
-}
-
-EVIDENCE_GROUPS_BY_HYPOTHESIS = {
-    HypothesisName.LOAD_SPIKE: ("load", "utilization"),
-    HypothesisName.DEPLOYMENT_REGRESSION: ("deployment", "exceptions|latency"),
-    HypothesisName.RESOURCE_SATURATION: ("pressure", "utilization"),
-    HypothesisName.DEPENDENCY_FAILURE: ("dependency", "topology"),
-}
+from apps.guardian_api.rules import (
+    ACTION_BY_HYPOTHESIS,
+    ALLOWED_SOURCES_BY_SIGNAL,
+    EVIDENCE_GROUPS_BY_HYPOTHESIS,
+    score_hypotheses,
+)
 
 TARGET_CORRELATED_SIGNALS = {
     "request_rate",
@@ -106,7 +95,18 @@ def _evidence_integrity_failures(
     }
     if any(item.usable_samples == 0 for _, item in evidence_items):
         failures.append(CriticalIntegrityFailure.ZERO_SAMPLES)
+    for signal_name, evidence in evidence_items:
+        if evidence.source not in ALLOWED_SOURCES_BY_SIGNAL[signal_name]:
+            failures.append(CriticalIntegrityFailure.COMPARISON_INVALID)
+        if evidence.freshness is EvidenceFreshness.CONFLICTING:
+            failures.append(CriticalIntegrityFailure.COMPARISON_INVALID)
+        if evidence.observed_at - now > timedelta(
+            seconds=60
+        ) or evidence.observed_at - facts.observed_at > timedelta(seconds=60):
+            failures.append(CriticalIntegrityFailure.TIMESTAMP_SKEW)
     for signal_name in required_signals:
+        if signal_name == "telemetry_quality":
+            continue
         evidence = evidence_by_signal.get(signal_name)
         if (
             evidence is None
@@ -144,6 +144,32 @@ def _evidence_integrity_failures(
         and CriticalIntegrityFailure.IDENTITY_CONFLICT not in failures
     ):
         failures.append(CriticalIntegrityFailure.IDENTITY_CONFLICT)
+    deployment = facts.signals.deployment_version
+    identity = facts.identity
+    if deployment is not None and (
+        identity is None
+        or identity.image_digest is None
+        and identity.service_version is None
+        or deployment.subject_role != identity.target_role
+        or deployment.environment != identity.environment
+        or deployment.namespace != identity.namespace
+        or deployment.workload_kind != identity.workload_kind
+        or deployment.workload_name != identity.workload_name
+        or deployment.service_name != identity.service_name
+        or identity.image_digest is not None
+        and deployment.current_digest != identity.image_digest
+        or identity.service_version is not None
+        and deployment.current_service_version != identity.service_version
+    ):
+        failure = (
+            CriticalIntegrityFailure.IDENTITY_MISSING
+            if identity is None
+            or identity.image_digest is None
+            and identity.service_version is None
+            else CriticalIntegrityFailure.IDENTITY_CONFLICT
+        )
+        if failure not in failures:
+            failures.append(failure)
     return tuple(failures)
 
 
@@ -196,6 +222,9 @@ def evaluate_incident(
 ) -> GuardianProjection:
     """Produce a fail-closed, side-effect-free incident projection."""
 
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("evaluation time must be timezone-aware")
+
     identity_resolved = facts.identity is not None
     failures = _integrity_failures(
         facts.telemetry,
@@ -225,6 +254,7 @@ def evaluate_incident(
         dict.fromkeys(ACTION_BY_HYPOTHESIS[item.name] for item in eligible)
     )
     forbidden_actions: list[ActionType] = []
+    permitted_actions: tuple[ActionType, ...] = ()
     proposed_action: ActionType | None = None
     incident_class: IncidentClass | None = None
     terminal_reason: str | None = None
@@ -239,7 +269,17 @@ def evaluate_incident(
         if foreign_evidence:
             terminal_reason = "tenant-mismatch"
         forbidden_actions.extend(
-            (ActionType.SCALE_UP, ActionType.SCALE_DOWN, ActionType.ROLLBACK)
+            (
+                ActionType.SCALE_UP,
+                ActionType.SCALE_DOWN,
+                ActionType.ROLLBACK,
+                ActionType.PROTECT_DEPENDENCY,
+            )
+        )
+        permitted_actions = (
+            ActionType.INVESTIGATE,
+            ActionType.ALERT,
+            ActionType.SCALER_PAUSE,
         )
     elif foreign_evidence:
         terminal_reason = "tenant-mismatch"
@@ -281,6 +321,7 @@ def evaluate_incident(
     action_time = facts.control.action_attempted_at or now
     policy_current = (
         facts.policy.state is PolicyState.FRESH
+        and facts.policy.evaluated_at <= now
         and facts.policy.evaluated_at <= action_time
         and action_time - facts.policy.evaluated_at <= timedelta(seconds=30)
     )
@@ -360,6 +401,7 @@ def evaluate_incident(
         integrity_failures=failures,
         hypotheses=hypotheses,
         eligible_actions=eligible_actions,
+        permitted_actions=permitted_actions,
         forbidden_actions=tuple(dict.fromkeys(forbidden_actions)),
         proposed_action=proposed_action,
         workflow_state=workflow_state,

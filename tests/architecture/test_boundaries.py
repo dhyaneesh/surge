@@ -136,6 +136,28 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             1,
         )
 
+    def test_guardian_application_imports_kubernetes_write_client(self) -> None:
+        self.assert_rule(
+            {
+                "apps/guardian_api/domain.py": "from kubernetes.client import AppsV1Api\n"
+            },
+            "ARCH-GUARDIAN-NO-WRITE-CLIENT",
+            "apps/guardian_api/domain.py",
+            1,
+        )
+
+    def test_guardian_application_imports_action_provider(self) -> None:
+        self.assert_rule(
+            {
+                "apps/guardian_api/domain.py": (
+                    "from services.action_controller.providers import RollbackProvider\n"
+                )
+            },
+            "ARCH-GUARDIAN-NO-ACTION-PROVIDER",
+            "apps/guardian_api/domain.py",
+            1,
+        )
+
     def test_production_service_imports_signoz_mcp_client(self) -> None:
         self.assert_rule(
             {"services/reasoner/diagnostics.py": "import signoz_mcp.client\n"},
