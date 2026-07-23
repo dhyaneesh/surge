@@ -8,25 +8,32 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Thread
-from typing import Any, Iterator
+from typing import Any, Iterator, Sequence
 
 import pytest
 
 from apps.guardian_api.http import create_server
 from apps.guardian_api.service import GuardianService
 from testbeds.adapters.otel_demo import OpenTelemetryDemoAdapter
-from testbeds.evidence.collector import EvidenceSample
-from testbeds.evidence.contracts import EvidenceSourceKind
+from testbeds.adapters.command_runner import CommandResult
+from testbeds.evidence.collector import EvidenceCollector, ProbeResult
+from testbeds.evidence.signoz import SignozQueryResult
 from testbeds.environments.capabilities import ENVIRONMENT_DECLARATIONS
 from testbeds.environments.otel_demo import OTEL_DEMO_ENVIRONMENT
 from testbeds.models import (
     BaselineState,
     EnvironmentRelease,
     EnvironmentState,
+    FaultExecution,
+    FaultSpecification,
     LoadExecution,
     LoadProfile,
     ObservedServiceIdentity,
     WorkloadState,
+)
+from testbeds.scenarios.evidence_provider import (
+    CollectorEvidenceTargets,
+    CollectorScenarioEvidenceProvider,
 )
 from testbeds.scenarios.execution import (
     AdapterRegistration,
@@ -36,6 +43,7 @@ from testbeds.scenarios.execution import (
 )
 from testbeds.scenarios.guardian_client import HttpGuardianClient
 from testbeds.scenarios.loader import load_guardian_scenario
+from testbeds.scenarios.v1alpha2 import EnvironmentCapability, GuardianScenarioV1Alpha2
 
 TOKEN = "guardian_local_token_A_0123456789"
 DIGEST = "sha256:" + "a" * 64
@@ -89,6 +97,10 @@ class ControlledOtelDemoAdapter(OpenTelemetryDemoAdapter):
         self._active_load = True
         return LoadExecution(profile, active=True)
 
+    async def inject_fault(self, fault: FaultSpecification) -> FaultExecution:
+        self._active_faults.add(fault.fault_type)
+        return FaultExecution(fault, active=True)
+
     async def observe_state(self) -> EnvironmentState:
         return _state()
 
@@ -97,78 +109,49 @@ class ControlledOtelDemoAdapter(OpenTelemetryDemoAdapter):
 
 
 @dataclass
-class RecordingEvidenceProvider:
-    assessment_calls: int = 0
-    recovery_calls: int = 0
+class ControlledCommandRunner:
+    responses: list[str]
+    calls: list[tuple[str, ...]]
 
-    async def collect_assessment_evidence(self, **kwargs) -> tuple[EvidenceSample, ...]:
-        self.assessment_calls += 1
-        observed_at = datetime.now(UTC)
-        return (
-            EvidenceSample(
-                EvidenceSourceKind.SIGNOZ_TELEMETRY,
-                observed_at=observed_at,
-                provenance_ref="query-contract/assessment-telemetry",
-                values={
-                    "quality": 1.0,
-                    "usable_samples": 10,
-                    "required_samples": 10,
-                    "pipeline_available": True,
-                    "comparison_valid": True,
-                },
-            ),
-            EvidenceSample(
-                EvidenceSourceKind.ENDPOINT_PROBE,
-                observed_at=observed_at,
-                provenance_ref="endpoint-probe/assessment-checkout",
-                values={
-                    "request_rate": 240.0,
-                    "baseline_request_rate": 100.0,
-                    "error_rate": 0.01,
-                    "baseline_error_rate": 0.01,
-                    "usable_samples": 10,
-                    "required_samples": 10,
-                },
-            ),
-            EvidenceSample(
-                EvidenceSourceKind.METRICS_API,
-                observed_at=observed_at,
-                provenance_ref="metrics-api/assessment-checkout",
-                values={
-                    "cpu_utilization": 0.90,
-                    "memory_utilization": 0.55,
-                    "usable_samples": 10,
-                    "required_samples": 10,
-                },
-            ),
-            EvidenceSample(
-                EvidenceSourceKind.ROLLOUT_STATE,
-                observed_at=observed_at,
-                provenance_ref="rollout-state/assessment-redis",
-                values={
-                    "dependency_healthy": True,
-                    "usable_samples": 10,
-                    "required_samples": 10,
-                },
-            ),
-        )
+    def __init__(self, responses: Sequence[str]) -> None:
+        self.responses = list(responses)
+        self.calls = []
 
-    async def collect_recovery_evidence(self, **kwargs) -> tuple[EvidenceSample, ...]:
-        self.recovery_calls += 1
-        observed_at = datetime.now(UTC)
-        return (
-            EvidenceSample(
-                EvidenceSourceKind.SIGNOZ_TELEMETRY,
-                observed_at=observed_at,
-                provenance_ref="query-contract/recovery-telemetry",
-                values={
-                    "quality": 1.0,
-                    "usable_samples": 10,
-                    "required_samples": 10,
-                    "pipeline_available": True,
-                    "comparison_valid": True,
-                },
-            ),
+    async def run(self, argv, *, timeout, cwd=None, input_text=None) -> CommandResult:
+        command = tuple(argv)
+        self.calls.append(command)
+        return CommandResult(command, 0, self.responses.pop(0), "", 0.01)
+
+
+@dataclass
+class ControlledHttpRunner:
+    probe_calls: int = 0
+
+    async def probe(self, url, *, timeout, headers=None) -> ProbeResult:
+        self.probe_calls += 1
+        return ProbeResult(status_code=200, latency_ms=10.0)
+
+    async def post_json(self, url, payload, *, timeout, headers=None) -> ProbeResult:
+        return ProbeResult(status_code=200, latency_ms=10.0)
+
+
+@dataclass
+class ControlledSignozContract:
+    calls: int = 0
+
+    async def query_telemetry_arrival(self, *, identity, lookback) -> SignozQueryResult:
+        self.calls += 1
+        return SignozQueryResult(
+            matched=True,
+            observed_at=datetime.now(UTC),
+            provenance_ref="signoz/approved-telemetry-arrival",
+            values={
+                "quality": 1.0,
+                "usable_samples": 10,
+                "required_samples": 10,
+                "pipeline_available": True,
+                "comparison_valid": True,
+            },
         )
 
 
@@ -191,12 +174,59 @@ def server() -> Iterator[Any]:
 def test_lifecycle_persists_distinct_assessment_and_recovery_evidence(
     server, tmp_path: Path
 ) -> None:
-    provider = RecordingEvidenceProvider()
+    scenario_payload = load_guardian_scenario(
+        "testbeds/scenarios/resource-saturation.yaml"
+    ).model_dump(mode="python", by_alias=True)
+    expected = scenario_payload["spec"]["expected"]
+    expected["incident"].update({"incidentClass": None, "actionable": False})
+    expected["actions"] = {"eligible": [], "forbidden": [], "proposed": None}
+    expected["mutations"]["count"] = {"exact": 0}
+    expected["mutations"]["actions"] = []
+    expected["policy"]["decision"] = "denied"
+    scenario = GuardianScenarioV1Alpha2.model_validate(scenario_payload)
+    workload = json.dumps(
+        {
+            "spec": {
+                "replicas": 3,
+                "template": {"spec": {"containers": [{"image": "checkout:1.2.3"}]}},
+            },
+            "status": {"readyReplicas": 3},
+        }
+    )
+    metrics = json.dumps({"containers": [{"usage": {"cpu": "90m", "memory": "120Mi"}}]})
+    command_runner = ControlledCommandRunner((workload, metrics, workload, metrics))
+    http_runner = ControlledHttpRunner()
+    signoz_contract = ControlledSignozContract()
+    provider = CollectorScenarioEvidenceProvider(
+        collector=EvidenceCollector(
+            command_runner=command_runner,
+            http_runner=http_runner,
+            clock=lambda: datetime.now(UTC),
+        ),
+        targets=CollectorEvidenceTargets(
+            namespace="guardian-live-evidence",
+            endpoint_url="http://checkout.guardian-live-evidence.svc.cluster.local",
+            workload_kind="deployment",
+            workload_name="checkout",
+            workload_role="request-processor",
+            service_name="checkout",
+            metrics_pod_name="checkout-0",
+            cpu_limit_millicores=100,
+            memory_limit_bytes=128 * 1024 * 1024,
+            signoz_contract=signoz_contract,
+        ),
+        monotonic_clock=iter((10.0, 10.01, 20.0, 20.01)).__next__,
+    )
     registration = AdapterRegistration(
         environment="otel-demo",
         adapter=ControlledOtelDemoAdapter(workspace=tmp_path / "otel"),
         release=OTEL_DEMO_ENVIRONMENT.release(),
-        declaration=ENVIRONMENT_DECLARATIONS["otel-demo"],
+        declaration=ENVIRONMENT_DECLARATIONS["otel-demo"].model_copy(
+            update={
+                "capabilities": ENVIRONMENT_DECLARATIONS["otel-demo"].capabilities
+                | {EnvironmentCapability.RESOURCE_PRESSURE}
+            }
+        ),
         role_bindings={"request-processor": "checkout"},
         fault_role_bindings={},
         deployment_bindings={},
@@ -209,9 +239,7 @@ def test_lifecycle_persists_distinct_assessment_and_recovery_evidence(
 
     result = asyncio.run(
         ScenarioExecutor(client).execute(
-            load_guardian_scenario(
-                "testbeds/scenarios/legitimate-demand-scale-up.yaml"
-            ),
+            scenario,
             registration,
             ExecutionSettings(
                 tmp_path / "artifacts",
@@ -232,5 +260,6 @@ def test_lifecycle_persists_distinct_assessment_and_recovery_evidence(
     recovery = json.loads(recovery_path.read_text())
     assert assessment[0]["observed_at"] != recovery[0]["observed_at"]
     assert assessment[0]["provenance_ref"] != recovery[0]["provenance_ref"]
-    assert provider.assessment_calls == 1
-    assert provider.recovery_calls == 1
+    assert len(command_runner.calls) == 4
+    assert http_runner.probe_calls == 6
+    assert signoz_contract.calls == 2
