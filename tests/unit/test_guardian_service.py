@@ -17,6 +17,7 @@ from apps.guardian_api.models import (
     EvidencePass,
     EvidenceSource,
     IncidentFacts,
+    IncidentSubmission,
     IncidentClass,
     IncidentSeverity,
     NumericEvidence,
@@ -91,6 +92,11 @@ def facts(
         policy=PolicyFacts(state=PolicyState.FRESH, evaluated_at=NOW),
         control=control or ControlFacts(),
     )
+
+
+def submission(*, tenant_id: str = "tenant-a") -> IncidentSubmission:
+    payload = facts(tenant_id=tenant_id).model_dump(exclude={"incident_id"})
+    return IncidentSubmission.model_validate(payload)
 
 
 def observation(
@@ -198,10 +204,14 @@ def test_create_and_append_reject_naive_operation_times_without_persistence() ->
     naive_now = NOW.replace(tzinfo=None)
 
     with pytest.raises(ValueError, match="timezone-aware"):
-        service.submit_incident("tenant-a", "request-1", facts(), now=naive_now)
+        service.restore_correlated_incident(
+            "tenant-a", "request-1", facts(), now=naive_now
+        )
     assert store.snapshot().incidents == ()
 
-    created = service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
+    created = service.restore_correlated_incident(
+        "tenant-a", "request-1", facts(), now=NOW
+    )
     with pytest.raises(ValueError, match="timezone-aware"):
         service.append_observation(
             "tenant-a",
@@ -214,7 +224,7 @@ def test_create_and_append_reject_naive_operation_times_without_persistence() ->
 
 def test_delayed_submission_evaluates_stale_facts_at_operation_time() -> None:
     operation_time = NOW + timedelta(minutes=10)
-    snapshot = GuardianService(InMemoryIncidentStore()).submit_incident(
+    snapshot = GuardianService(InMemoryIncidentStore()).restore_correlated_incident(
         "tenant-a", "request-1", facts(), now=operation_time
     )
 
@@ -230,7 +240,9 @@ def test_delayed_observation_is_stale_at_append_operation_time() -> None:
     incident_facts = facts(
         control=ControlFacts(action_completed_at=NOW - timedelta(minutes=1))
     )
-    service.submit_incident("tenant-a", "request-1", incident_facts, now=NOW)
+    service.restore_correlated_incident(
+        "tenant-a", "request-1", incident_facts, now=NOW
+    )
     stale_observation = observation(
         observed_at=NOW + timedelta(minutes=1), healthy=True
     )
@@ -260,7 +272,7 @@ def test_policy_freshness_is_evaluated_at_submission_operation_time() -> None:
     )
     operation_time = NOW + timedelta(seconds=31)
 
-    snapshot = GuardianService(InMemoryIncidentStore()).submit_incident(
+    snapshot = GuardianService(InMemoryIncidentStore()).restore_correlated_incident(
         "tenant-a", "request-1", incident_facts, now=operation_time
     )
 
@@ -278,7 +290,7 @@ def test_concurrent_duplicate_submissions_create_one_incident_and_workflow() -> 
 
     def submit():
         barrier.wait()
-        return service.submit_incident(
+        return service.restore_correlated_incident(
             authenticated_tenant="tenant-a",
             idempotency_key="request-1",
             facts=request,
@@ -298,6 +310,40 @@ def test_concurrent_duplicate_submissions_create_one_incident_and_workflow() -> 
     assert all(item == results[0] for item in results)
 
 
+def test_new_submission_generates_one_server_owned_id_atomically() -> None:
+    generated_ids: list[str] = []
+
+    def generate_incident_id() -> str:
+        generated_ids.append("server-generated-id")
+        return generated_ids[-1]
+
+    store = InMemoryIncidentStore(incident_id_factory=generate_incident_id)
+    service = GuardianService(store)
+    request = submission()
+    workers = 8
+    barrier = Barrier(workers)
+
+    def submit():
+        barrier.wait()
+        return service.submit_incident(
+            authenticated_tenant="tenant-a",
+            idempotency_key="server-owned",
+            submission=request,
+            now=NOW,
+        )
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        results = tuple(executor.map(lambda _: submit(), range(workers)))
+
+    assert generated_ids == ["server-generated-id"]
+    assert {item.incident_id for item in results} == {"server-generated-id"}
+    assert {item.facts.incident_id for item in results} == {"server-generated-id"}
+    assert {item.workflow_id for item in results} == {
+        "guardian/tenant-a/incident/server-generated-id"
+    }
+    assert store.snapshot().idempotency_count == 1
+
+
 def test_same_key_different_facts_race_has_one_winner_and_conflicts() -> None:
     store = InMemoryIncidentStore()
     service = GuardianService(store)
@@ -308,7 +354,7 @@ def test_same_key_different_facts_race_has_one_winner_and_conflicts() -> None:
         barrier.wait()
         request = facts(incident_id=f"incident-{index}")
         try:
-            return service.submit_incident(
+            return service.restore_correlated_incident(
                 "tenant-a", "racing-request", request, now=NOW
             )
         except IdempotencyConflictError as error:
@@ -328,10 +374,10 @@ def test_same_key_different_facts_race_has_one_winner_and_conflicts() -> None:
 
 def test_same_tenant_and_key_with_different_facts_conflicts() -> None:
     service = GuardianService(InMemoryIncidentStore())
-    service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
+    service.restore_correlated_incident("tenant-a", "request-1", facts(), now=NOW)
 
     with pytest.raises(IdempotencyConflictError):
-        service.submit_incident(
+        service.restore_correlated_incident(
             "tenant-a",
             "request-1",
             facts(severity=IncidentSeverity.CRITICAL),
@@ -351,8 +397,12 @@ def test_same_instant_with_different_offsets_is_the_same_idempotent_request() ->
     shifted_payload["policy"]["evaluated_at"] = shifted_at
     shifted = IncidentFacts.model_validate(shifted_payload)
 
-    first = service.submit_incident("tenant-a", "request-1", original, now=NOW)
-    duplicate = service.submit_incident("tenant-a", "request-1", shifted, now=NOW)
+    first = service.restore_correlated_incident(
+        "tenant-a", "request-1", original, now=NOW
+    )
+    duplicate = service.restore_correlated_incident(
+        "tenant-a", "request-1", shifted, now=NOW
+    )
 
     assert incident_facts_hash(original) == incident_facts_hash(shifted)
     assert duplicate == first
@@ -361,7 +411,7 @@ def test_same_instant_with_different_offsets_is_the_same_idempotent_request() ->
 
 def test_cross_tenant_lookup_and_update_are_non_disclosing() -> None:
     service = GuardianService(InMemoryIncidentStore())
-    service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
+    service.restore_correlated_incident("tenant-a", "request-1", facts(), now=NOW)
 
     with pytest.raises(IncidentNotFoundError, match="incident not found"):
         service.get_incident("tenant-b", "incident-1")
@@ -381,7 +431,7 @@ def test_cross_tenant_lookup_and_update_are_non_disclosing() -> None:
 
 def test_observation_cannot_change_the_incident_tenant_or_identity() -> None:
     service = GuardianService(InMemoryIncidentStore())
-    service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
+    service.restore_correlated_incident("tenant-a", "request-1", facts(), now=NOW)
 
     with pytest.raises(TenantMismatchError):
         service.append_observation(
@@ -417,7 +467,9 @@ def test_projector_failure_rolls_back_append() -> None:
 
     store = InMemoryIncidentStore(projector=failing_projector)
     service = GuardianService(store)
-    before = service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
+    before = service.restore_correlated_incident(
+        "tenant-a", "request-1", facts(), now=NOW
+    )
 
     with pytest.raises(RuntimeError, match="projection failed"):
         service.append_observation(
@@ -449,7 +501,9 @@ def test_projector_reentry_is_rejected_and_rolls_back_outer_append() -> None:
     store = InMemoryIncidentStore(projector=reentrant_projector)
     store_reference["store"] = store
     service = GuardianService(store)
-    before = service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
+    before = service.restore_correlated_incident(
+        "tenant-a", "request-1", facts(), now=NOW
+    )
 
     with pytest.raises(ReentrantStoreWriteError):
         service.append_observation(
@@ -465,7 +519,7 @@ def test_projector_reentry_is_rejected_and_rolls_back_outer_append() -> None:
 def test_chronologically_older_observation_is_rejected_without_persistence() -> None:
     store = InMemoryIncidentStore()
     service = GuardianService(store)
-    service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
+    service.restore_correlated_incident("tenant-a", "request-1", facts(), now=NOW)
     before = service.append_observation(
         "tenant-a",
         "incident-1",
@@ -487,7 +541,9 @@ def test_chronologically_older_observation_is_rejected_without_persistence() -> 
 def test_first_observation_cannot_predate_incident_facts() -> None:
     store = InMemoryIncidentStore()
     service = GuardianService(store)
-    before = service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
+    before = service.restore_correlated_incident(
+        "tenant-a", "request-1", facts(), now=NOW
+    )
 
     with pytest.raises(ObservationOrderError):
         service.append_observation(
@@ -502,7 +558,7 @@ def test_first_observation_cannot_predate_incident_facts() -> None:
 
 def test_first_observation_may_equal_incident_observed_at() -> None:
     service = GuardianService(InMemoryIncidentStore())
-    service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
+    service.restore_correlated_incident("tenant-a", "request-1", facts(), now=NOW)
 
     snapshot = service.append_observation(
         "tenant-a",
@@ -530,7 +586,7 @@ def test_pure_replay_rejects_reordered_history() -> None:
 def test_duplicate_observation_delivery_is_idempotent() -> None:
     store = InMemoryIncidentStore()
     service = GuardianService(store)
-    service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
+    service.restore_correlated_incident("tenant-a", "request-1", facts(), now=NOW)
     update = observation(observed_at=NOW + timedelta(minutes=1))
     first = service.append_observation(
         "tenant-a",
@@ -554,7 +610,7 @@ def test_duplicate_observation_delivery_is_idempotent() -> None:
 def test_simultaneous_appends_have_no_lost_updates() -> None:
     store = InMemoryIncidentStore()
     service = GuardianService(store)
-    service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
+    service.restore_correlated_incident("tenant-a", "request-1", facts(), now=NOW)
     workers = 10
     barrier = Barrier(workers)
 
@@ -592,7 +648,9 @@ def test_conflicting_window_is_fail_closed_and_arrival_order_independent() -> No
 
     def run(first: ObservationUpdate, second: ObservationUpdate):
         service = GuardianService(InMemoryIncidentStore())
-        service.submit_incident("tenant-a", "request-1", incident_facts, now=NOW)
+        service.restore_correlated_incident(
+            "tenant-a", "request-1", incident_facts, now=NOW
+        )
         first_snapshot = service.append_observation(
             "tenant-a", "incident-1", first, now=NOW + timedelta(minutes=1)
         )
@@ -646,7 +704,9 @@ def test_conflicting_window_makes_every_hypothesis_ineligible() -> None:
     unhealthy = observation(observed_at=NOW + timedelta(minutes=1), healthy=False)
     service = GuardianService(InMemoryIncidentStore())
 
-    initial = service.submit_incident("tenant-a", "request-1", incident_facts, now=NOW)
+    initial = service.restore_correlated_incident(
+        "tenant-a", "request-1", incident_facts, now=NOW
+    )
     service.append_observation(
         "tenant-a", "incident-1", healthy, now=NOW + timedelta(minutes=1)
     )
@@ -670,7 +730,9 @@ def test_concurrent_conflicting_window_matches_canonical_fail_closed_state() -> 
     unhealthy = observation(observed_at=NOW + timedelta(minutes=1), healthy=False)
 
     expected_service = GuardianService(InMemoryIncidentStore())
-    expected_service.submit_incident("tenant-a", "request-1", incident_facts, now=NOW)
+    expected_service.restore_correlated_incident(
+        "tenant-a", "request-1", incident_facts, now=NOW
+    )
     expected_service.append_observation(
         "tenant-a", "incident-1", healthy, now=NOW + timedelta(minutes=1)
     )
@@ -680,7 +742,9 @@ def test_concurrent_conflicting_window_matches_canonical_fail_closed_state() -> 
 
     store = InMemoryIncidentStore()
     service = GuardianService(store)
-    service.submit_incident("tenant-a", "request-1", incident_facts, now=NOW)
+    service.restore_correlated_incident(
+        "tenant-a", "request-1", incident_facts, now=NOW
+    )
     barrier = Barrier(2)
 
     def append(update: ObservationUpdate):
@@ -720,7 +784,7 @@ def test_observations_are_append_only_and_reevaluate_history_deterministically()
 
     def run_sequence():
         service = GuardianService(InMemoryIncidentStore())
-        initial = service.submit_incident(
+        initial = service.restore_correlated_incident(
             "tenant-a",
             "request-1",
             incident_facts,
@@ -769,7 +833,9 @@ def test_observations_are_append_only_and_reevaluate_history_deterministically()
 
 def test_returned_snapshots_are_frozen_copies_not_store_objects() -> None:
     service = GuardianService(InMemoryIncidentStore())
-    created = service.submit_incident("tenant-a", "request-1", facts(), now=NOW)
+    created = service.restore_correlated_incident(
+        "tenant-a", "request-1", facts(), now=NOW
+    )
 
     with pytest.raises(ValidationError):
         created.workflow_id = "guardian/tenant-b/incident/incident-1"  # type: ignore[misc]

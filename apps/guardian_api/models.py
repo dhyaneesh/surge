@@ -335,10 +335,11 @@ class SignalFacts(StrictModel):
         return tuple(value for _, value in self.evidence_items())
 
 
-class IncidentFacts(StrictModel):
+class IncidentSubmission(StrictModel):
+    """Caller-supplied facts before the server assigns incident identity."""
+
     schema_version: Literal["guardian.incident-facts/v1"] = "guardian.incident-facts/v1"
     tenant_id: ScopedIdentifier
-    incident_id: ScopedIdentifier
     severity: IncidentSeverity = IncidentSeverity.WARNING
     observed_at: AwareDatetime
     identity: TargetIdentity | None
@@ -354,6 +355,12 @@ class IncidentFacts(StrictModel):
         if not self.telemetry.required_signals:
             raise ValueError("executable incident facts require a signal contract")
         return self
+
+
+class IncidentFacts(IncidentSubmission):
+    """Persisted facts with an incident identity assigned by a trusted boundary."""
+
+    incident_id: ScopedIdentifier
 
 
 class ObservationUpdate(StrictModel):

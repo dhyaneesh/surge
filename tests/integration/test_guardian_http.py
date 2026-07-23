@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import selectors
 import subprocess
 import sys
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from http.client import HTTPConnection, HTTPResponse
-from threading import Thread
+from threading import Event, Thread
 from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import urlsplit
@@ -28,6 +29,7 @@ from apps.guardian_api.models import (
     TargetIdentity,
     TelemetryFacts,
 )
+from apps.guardian_api.service import GuardianService
 
 
 DIGEST = "sha256:" + "a" * 64
@@ -47,13 +49,11 @@ def telemetry(observed_at: datetime) -> TelemetryFacts:
     )
 
 
-def incident_payload(
-    *, tenant_id: str = "tenant-a", incident_id: str = "incident-1"
-) -> dict[str, Any]:
+def incident_payload(*, tenant_id: str = "tenant-a") -> dict[str, Any]:
     observed_at = datetime.now(UTC)
     facts = IncidentFacts(
         tenant_id=tenant_id,
-        incident_id=incident_id,
+        incident_id="caller-chosen-id",
         observed_at=observed_at,
         identity=TargetIdentity(
             target_role="request-processor",
@@ -70,7 +70,9 @@ def incident_payload(
         policy=PolicyFacts(state=PolicyState.FRESH, evaluated_at=observed_at),
         control=ControlFacts(),
     )
-    return facts.model_dump(mode="json")
+    payload = facts.model_dump(mode="json")
+    del payload["incident_id"]
+    return payload
 
 
 def observation_payload(
@@ -124,8 +126,9 @@ def request(
     idempotency_key: str | None = None,
     payload: dict[str, Any] | bytes | None = None,
     content_type: str | None = None,
+    extra_headers: dict[str, str] | None = None,
 ) -> tuple[HTTPResponse, dict[str, Any]]:
-    headers: dict[str, str] = {}
+    headers: dict[str, str] = dict(extra_headers or {})
     if authorization is not None:
         headers["Authorization"] = authorization
     elif token is not None:
@@ -174,14 +177,19 @@ def test_health_create_duplicate_observe_and_snapshot_lifecycle() -> None:
         )
         assert created.status == duplicate.status == 200
         assert created_body == duplicate_body
-        assert created_body["incident_id"] == "incident-1"
+        incident_id = created_body["incident_id"]
+        assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", incident_id)
+        assert incident_id not in {"caller-chosen-id", "tenant-a", "create-1"}
+        assert created_body["workflow_id"] == (
+            f"guardian/tenant-a/incident/{incident_id}"
+        )
 
         observed, observed_body = request(
             server,
             "POST",
-            "/v1/incidents/incident-1/observations",
+            f"/v1/incidents/{incident_id}/observations",
             token="opaque-a",
-            payload=observation_payload(),
+            payload=observation_payload(incident_id=incident_id),
         )
         assert observed.status == 200
         assert len(observed_body["observations"]) == 1
@@ -189,7 +197,7 @@ def test_health_create_duplicate_observe_and_snapshot_lifecycle() -> None:
         snapshot, snapshot_body = request(
             server,
             "GET",
-            "/v1/incidents/incident-1/scenario-snapshot",
+            f"/v1/incidents/{incident_id}/scenario-snapshot",
             token="opaque-a",
         )
         assert snapshot.status == 200
@@ -225,6 +233,25 @@ def test_malformed_requests_and_unknown_paths_are_bounded() -> None:
         assert wrong_method_body == {"error": "method not allowed"}
 
 
+def test_universal_envelope_caps_gets_and_unknown_methods_use_json_405() -> None:
+    with running_server(max_request_body=64) as server:
+        oversized, oversized_body = request(
+            server,
+            "GET",
+            "/health",
+            payload=b"x" * 65,
+        )
+        unsupported, unsupported_body = request(server, "PROPFIND", "/health")
+
+        assert oversized.status == 413
+        assert oversized_body == {"error": "request body too large"}
+        assert oversized.getheader("Content-Type") == "application/json"
+        assert unsupported.status == 405
+        assert unsupported.getheader("Allow") == "GET"
+        assert unsupported.getheader("Content-Type") == "application/json"
+        assert unsupported_body == {"error": "method not allowed"}
+
+
 def test_server_shutdown_releases_the_loopback_listener() -> None:
     server = create_server(token_tenants={"opaque-a": "tenant-a"}, port=0)
     host, port = server.listening_address
@@ -248,6 +275,55 @@ def test_server_shutdown_releases_the_loopback_listener() -> None:
         raise AssertionError("shutdown listener still accepted a connection")
     finally:
         connection.close()
+
+
+def test_shutdown_waits_for_active_request_handlers() -> None:
+    entered = Event()
+    release = Event()
+
+    class BlockingService(GuardianService):
+        def get_incident(self, authenticated_tenant: str, incident_id: str):
+            entered.set()
+            assert release.wait(timeout=5)
+            return super().get_incident(authenticated_tenant, incident_id)
+
+    server = create_server(
+        token_tenants={"opaque-a": "tenant-a"},
+        service=BlockingService(),
+        port=0,
+    )
+    serve_thread = Thread(target=server.serve_forever)
+    request_thread = Thread(
+        target=lambda: request(
+            server,
+            "GET",
+            "/v1/incidents/missing/scenario-snapshot",
+            token="opaque-a",
+        )
+    )
+    serve_thread.start()
+    request_thread.start()
+    try:
+        assert entered.wait(timeout=2)
+        server.shutdown()
+        serve_thread.join(timeout=2)
+        assert not serve_thread.is_alive()
+
+        close_thread = Thread(target=server.server_close)
+        close_thread.start()
+        close_thread.join(timeout=0.1)
+        assert close_thread.is_alive()
+
+        release.set()
+        close_thread.join(timeout=2)
+        request_thread.join(timeout=2)
+        assert not close_thread.is_alive()
+        assert not request_thread.is_alive()
+    finally:
+        release.set()
+        server.server_close()
+        serve_thread.join(timeout=2)
+        request_thread.join(timeout=2)
 
 
 def test_cli_prints_only_readiness_and_shuts_down_cleanly_on_sigterm() -> None:

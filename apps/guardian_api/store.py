@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from enum import Enum
 from threading import RLock
 from typing import Any, Literal
+from uuid import uuid4
 
 from pydantic import AwareDatetime, BaseModel, model_validator
 
@@ -25,6 +26,7 @@ from apps.guardian_api.models import (
     GuardianProjection,
     IncidentClass,
     IncidentFacts,
+    IncidentSubmission,
     ObservationUpdate,
     PolicyDecision,
     ScopedIdentifier,
@@ -174,10 +176,25 @@ def canonical_incident_facts(facts: IncidentFacts) -> str:
     return canonical_json(facts)
 
 
+def canonical_incident_submission(submission: IncidentSubmission) -> str:
+    """Serialize caller-supplied facts without a caller-controlled incident ID."""
+
+    if not isinstance(submission, IncidentSubmission):
+        raise TypeError("submission must be validated IncidentSubmission")
+    return canonical_json(submission)
+
+
 def incident_facts_hash(facts: IncidentFacts) -> str:
     """Hash the canonical IncidentFacts representation."""
 
     canonical = canonical_incident_facts(facts)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def incident_submission_hash(submission: IncidentSubmission) -> str:
+    """Hash canonical submitted facts before server identity assignment."""
+
+    canonical = canonical_incident_submission(submission)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -312,12 +329,18 @@ class InMemoryIncidentStore:
     """One-lock local store with only store-owned incident mutations."""
 
     def __init__(
-        self, *, projector: ProjectionReplayer = replay_incident_history
+        self,
+        *,
+        projector: ProjectionReplayer = replay_incident_history,
+        incident_id_factory: Callable[[], str] | None = None,
     ) -> None:
         self._lock = RLock()
         self._idempotency: dict[tuple[str, str], _IdempotencyRecord] = {}
         self._incidents: dict[tuple[str, str], IncidentSnapshot] = {}
         self._projector = projector
+        self._incident_id_factory = incident_id_factory or (
+            lambda: f"inc-{uuid4().hex}"
+        )
         self._transaction_depth = 0
         self._reentry_attempted = False
 
@@ -355,7 +378,7 @@ class InMemoryIncidentStore:
             raise ProjectionInvariantError("projector returned an invalid history")
         return history
 
-    def create_idempotent(
+    def restore_correlated_idempotent(
         self,
         *,
         authenticated_tenant: str,
@@ -363,7 +386,7 @@ class InMemoryIncidentStore:
         facts: IncidentFacts,
         now: datetime,
     ) -> IncidentSnapshot:
-        """Atomically claim a key and create or return its incident."""
+        """Atomically restore trusted facts that already carry correlation."""
 
         now = _validated_operation_time(now)
         if facts.tenant_id != authenticated_tenant:
@@ -407,6 +430,75 @@ class InMemoryIncidentStore:
             self._idempotency[idempotency_identity] = _IdempotencyRecord(
                 facts_hash=facts_hash,
                 incident_key=incident_identity,
+            )
+            return _copy_snapshot(stored)
+
+    def create_new_idempotent(
+        self,
+        *,
+        authenticated_tenant: str,
+        idempotency_key: str,
+        submission: IncidentSubmission,
+        now: datetime,
+    ) -> IncidentSnapshot:
+        """Atomically assign one opaque incident ID after claiming a new key."""
+
+        now = _validated_operation_time(now)
+        if submission.tenant_id != authenticated_tenant:
+            raise IncidentInvariantError(
+                "submission tenant must match authenticated tenant"
+            )
+        idempotency_identity = (authenticated_tenant, idempotency_key)
+        payload_hash = incident_submission_hash(submission)
+        with self._write_transaction():
+            claimed = self._idempotency.get(idempotency_identity)
+            if claimed is not None:
+                if claimed.facts_hash != payload_hash:
+                    raise IdempotencyConflictError(
+                        "idempotency key already belongs to different submitted facts"
+                    )
+                return _copy_snapshot(self._incidents[claimed.incident_key])
+
+            incident_id = ""
+            facts: IncidentFacts | None = None
+            for _attempt in range(16):
+                candidate = self._incident_id_factory()
+                try:
+                    facts = IncidentFacts.model_validate(
+                        {
+                            **submission.model_dump(mode="python"),
+                            "incident_id": candidate,
+                        }
+                    )
+                except (TypeError, ValueError) as error:
+                    raise IncidentInvariantError(
+                        "incident ID generator returned an invalid identifier"
+                    ) from error
+                incident_identity = (authenticated_tenant, facts.incident_id)
+                if incident_identity not in self._incidents:
+                    incident_id = facts.incident_id
+                    break
+            if not incident_id or facts is None:
+                raise IncidentInvariantError(
+                    "incident ID generator did not produce a unique identifier"
+                )
+
+            evaluation_times = (now,)
+            projection_history = self._project(facts, (), evaluation_times, ())
+            stored = IncidentSnapshot(
+                tenant_id=authenticated_tenant,
+                incident_id=incident_id,
+                workflow_id=f"guardian/{authenticated_tenant}/incident/{incident_id}",
+                facts=facts,
+                evaluation_times=evaluation_times,
+                projection_history=projection_history,
+                projection=projection_history[-1],
+            )
+            stored = _copy_snapshot(stored)
+            self._incidents[(authenticated_tenant, incident_id)] = stored
+            self._idempotency[idempotency_identity] = _IdempotencyRecord(
+                facts_hash=payload_hash,
+                incident_key=(authenticated_tenant, incident_id),
             )
             return _copy_snapshot(stored)
 

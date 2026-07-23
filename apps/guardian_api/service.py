@@ -8,6 +8,7 @@ from re import fullmatch
 from apps.guardian_api.models import (
     SCOPED_IDENTIFIER_PATTERN,
     IncidentFacts,
+    IncidentSubmission,
     ObservationUpdate,
 )
 from apps.guardian_api.store import (
@@ -44,7 +45,7 @@ class GuardianService:
     ) -> None:
         self._store = store or InMemoryIncidentStore()
 
-    def submit_incident(
+    def restore_correlated_incident(
         self,
         authenticated_tenant: str,
         idempotency_key: str,
@@ -52,7 +53,7 @@ class GuardianService:
         *,
         now: datetime,
     ) -> IncidentSnapshot:
-        """Create one incident projection for a tenant-scoped idempotency key."""
+        """Restore already-correlated trusted facts outside the ingress path."""
 
         _require_scoped_identifier(authenticated_tenant, name="authenticated tenant")
         _require_nonempty(idempotency_key, name="idempotency key")
@@ -61,10 +62,33 @@ class GuardianService:
         if facts.tenant_id != authenticated_tenant:
             raise TenantMismatchError("authenticated tenant does not match incident")
 
-        return self._store.create_idempotent(
+        return self._store.restore_correlated_idempotent(
             authenticated_tenant=authenticated_tenant,
             idempotency_key=idempotency_key,
             facts=facts,
+            now=now,
+        )
+
+    def submit_incident(
+        self,
+        authenticated_tenant: str,
+        idempotency_key: str,
+        submission: IncidentSubmission,
+        *,
+        now: datetime,
+    ) -> IncidentSnapshot:
+        """Assign server identity and create one idempotent incident."""
+
+        _require_scoped_identifier(authenticated_tenant, name="authenticated tenant")
+        _require_nonempty(idempotency_key, name="idempotency key")
+        if not isinstance(submission, IncidentSubmission):
+            raise TypeError("submission must be validated IncidentSubmission")
+        if submission.tenant_id != authenticated_tenant:
+            raise TenantMismatchError("authenticated tenant does not match submission")
+        return self._store.create_new_idempotent(
+            authenticated_tenant=authenticated_tenant,
+            idempotency_key=idempotency_key,
+            submission=submission,
             now=now,
         )
 
@@ -110,14 +134,14 @@ class GuardianService:
         self,
         authenticated_tenant: str,
         idempotency_key: str,
-        facts: IncidentFacts,
+        submission: IncidentSubmission,
         *,
         now: datetime,
     ) -> IncidentSnapshot:
         """Compatibility name for submit_incident."""
 
         return self.submit_incident(
-            authenticated_tenant, idempotency_key, facts, now=now
+            authenticated_tenant, idempotency_key, submission, now=now
         )
 
     def update_observation(

@@ -101,6 +101,9 @@ class RegistryValidationTests(unittest.TestCase):
             {
                 "apps/guardian_api/http.py",
                 "apps/guardian_api/__main__.py",
+                "apps/guardian_api/models.py",
+                "apps/guardian_api/service.py",
+                "apps/guardian_api/store.py",
             },
             set(capability["implementation"]),
         )
@@ -108,6 +111,7 @@ class RegistryValidationTests(unittest.TestCase):
             {
                 "tests/integration/test_guardian_http.py",
                 "tests/security/test_guardian_http_security.py",
+                "tests/unit/test_guardian_service.py",
             },
             set(capability["tests"]),
         )

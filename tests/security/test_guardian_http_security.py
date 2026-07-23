@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+from http.client import HTTPConnection
+from threading import Thread
 from typing import Any, cast
 
 import pytest
 
-from apps.guardian_api.__main__ import parse_runtime_config
+from apps.guardian_api.__main__ import parse_runtime_config, run_runtime
 from apps.guardian_api.http import create_server, load_token_tenants
 from apps.guardian_api.service import GuardianService
 from apps.guardian_api.store import InMemoryIncidentStore, replay_incident_history
@@ -48,6 +50,38 @@ def test_body_tenant_cannot_override_authenticated_tenant() -> None:
         )
         assert response.status == 403
         assert body == {"error": "forbidden"}
+
+
+def test_untrusted_tenant_header_cannot_override_token_identity() -> None:
+    with running_server() as server:
+        response, body = request(
+            server,
+            "POST",
+            "/v1/incidents",
+            token="opaque-a",
+            idempotency_key="header-override",
+            payload=incident_payload(),
+            extra_headers={"X-Guardian-Tenant": "tenant-b"},
+        )
+        assert response.status == 200
+        assert body["tenant_id"] == "tenant-a"
+        assert body["facts"]["tenant_id"] == "tenant-a"
+
+
+def test_caller_supplied_incident_id_is_rejected() -> None:
+    payload = incident_payload()
+    payload["incident_id"] = "caller-chosen-id"
+    with running_server() as server:
+        response, body = request(
+            server,
+            "POST",
+            "/v1/incidents",
+            token="opaque-a",
+            idempotency_key="caller-id",
+            payload=payload,
+        )
+        assert response.status == 400
+        assert body == {"error": "invalid request body"}
 
 
 def test_foreign_evidence_is_rejected_before_evaluation() -> None:
@@ -96,7 +130,7 @@ def test_foreign_evidence_is_rejected_before_evaluation() -> None:
 
 def test_cross_tenant_lookup_is_a_non_disclosing_404() -> None:
     with running_server() as server:
-        created, _ = request(
+        created, created_body = request(
             server,
             "POST",
             "/v1/incidents",
@@ -113,7 +147,7 @@ def test_cross_tenant_lookup_is_a_non_disclosing_404() -> None:
         foreign, foreign_body = request(
             server,
             "GET",
-            "/v1/incidents/incident-1/scenario-snapshot",
+            f"/v1/incidents/{created_body['incident_id']}/scenario-snapshot",
             token="opaque-b",
         )
         assert created.status == 200
@@ -122,6 +156,9 @@ def test_cross_tenant_lookup_is_a_non_disclosing_404() -> None:
 
 
 def test_conflicting_idempotent_payload_is_409() -> None:
+    first_payload = incident_payload()
+    conflicting_payload = dict(first_payload)
+    conflicting_payload["severity"] = "critical"
     with running_server() as server:
         first, _ = request(
             server,
@@ -129,7 +166,7 @@ def test_conflicting_idempotent_payload_is_409() -> None:
             "/v1/incidents",
             token="opaque-a",
             idempotency_key="same-key",
-            payload=incident_payload(),
+            payload=first_payload,
         )
         conflict, body = request(
             server,
@@ -137,7 +174,7 @@ def test_conflicting_idempotent_payload_is_409() -> None:
             "/v1/incidents",
             token="opaque-a",
             idempotency_key="same-key",
-            payload=incident_payload(incident_id="incident-2"),
+            payload=conflicting_payload,
         )
         assert first.status == 200
         assert conflict.status == 409
@@ -239,12 +276,27 @@ def test_startup_rejects_invalid_token_entries_and_unsafe_binding() -> None:
         load_token_tenants('{"":"tenant-a"}')
     with pytest.raises(ValueError, match="token map"):
         load_token_tenants('{"opaque-a":"tenant/a"}')
+    with pytest.raises(ValueError, match="token map"):
+        load_token_tenants('{"tökén":"tenant-a"}')
     with pytest.raises(ValueError, match="non-loopback"):
         create_server(
             token_tenants={"opaque-a": "tenant-a"},
             host="0.0.0.0",
             port=0,
         )
+
+
+def test_non_ascii_bearer_is_a_safe_json_401() -> None:
+    with running_server() as server:
+        response, body = request(
+            server,
+            "GET",
+            "/v1/incidents/missing/scenario-snapshot",
+            authorization="Bearer \xff",
+        )
+        assert response.status == 401
+        assert response.getheader("Content-Type") == "application/json"
+        assert body == {"error": "authentication required"}
 
 
 def test_cli_configuration_defaults_to_loopback_and_requires_valid_values() -> None:
@@ -298,3 +350,71 @@ def test_cli_non_loopback_bind_needs_explicit_local_runtime_opt_in() -> None:
         allow_non_loopback=allowed.allow_non_loopback,
     )
     server.server_close()
+
+
+def test_cli_signal_setup_failure_closes_bound_listener() -> None:
+    config = parse_runtime_config(
+        {"GUARDIAN_LOCAL_TOKENS_JSON": '{"opaque-a":"tenant-a"}'},
+        ["--port", "0"],
+    )
+    servers = []
+
+    def server_factory(**kwargs: Any):
+        server = create_server(**kwargs)
+        servers.append(server)
+        return server
+
+    def fail_signal_setup(_number: int, _handler: Any) -> None:
+        raise RuntimeError("injected signal failure")
+
+    with pytest.raises(RuntimeError, match="injected signal failure"):
+        run_runtime(
+            config,
+            server_factory=server_factory,
+            signal_installer=fail_signal_setup,
+        )
+
+    host, port = servers[0].listening_address
+    connection = HTTPConnection(host, port, timeout=0.2)
+    with pytest.raises(OSError):
+        connection.connect()
+    connection.close()
+
+
+def test_cli_readiness_failure_stops_server_and_joins_thread() -> None:
+    config = parse_runtime_config(
+        {"GUARDIAN_LOCAL_TOKENS_JSON": '{"opaque-a":"tenant-a"}'},
+        ["--port", "0"],
+    )
+    servers = []
+    threads: list[Thread] = []
+
+    def server_factory(**kwargs: Any):
+        server = create_server(**kwargs)
+        servers.append(server)
+        return server
+
+    def thread_factory(**kwargs: Any) -> Thread:
+        thread = Thread(**kwargs)
+        threads.append(thread)
+        return thread
+
+    def fail_readiness(_message: str) -> None:
+        raise RuntimeError("injected readiness failure")
+
+    with pytest.raises(RuntimeError, match="injected readiness failure"):
+        run_runtime(
+            config,
+            server_factory=server_factory,
+            signal_installer=lambda _number, _handler: None,
+            thread_factory=thread_factory,
+            readiness_writer=fail_readiness,
+        )
+
+    assert len(threads) == 1
+    assert not threads[0].is_alive()
+    host, port = servers[0].listening_address
+    connection = HTTPConnection(host, port, timeout=0.2)
+    with pytest.raises(OSError):
+        connection.connect()
+    connection.close()

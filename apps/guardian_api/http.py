@@ -21,6 +21,7 @@ from pydantic import ValidationError
 from apps.guardian_api.models import (
     SCOPED_IDENTIFIER_PATTERN,
     IncidentFacts,
+    IncidentSubmission,
     ObservationUpdate,
 )
 from apps.guardian_api.service import GuardianService, TenantMismatchError
@@ -105,6 +106,7 @@ def _validated_token_tenants(token_tenants: Mapping[str, str]) -> Mapping[str, s
         if (
             not isinstance(token, str)
             or not token
+            or not token.isascii()
             or token != token.strip()
             or any(
                 character.isspace()
@@ -157,7 +159,7 @@ def _is_loopback(host: str) -> bool:
 class GuardianHTTPServer(ThreadingHTTPServer):
     """Thread-per-request server carrying only local Guardian dependencies."""
 
-    daemon_threads = True
+    daemon_threads = False
     block_on_close = True
 
     def __init__(
@@ -174,8 +176,11 @@ class GuardianHTTPServer(ThreadingHTTPServer):
         super().__init__(server_address, GuardianRequestHandler)
 
     def resolve_tenant(self, candidate: str) -> str | None:
+        if not candidate.isascii():
+            return None
+        candidate_bytes = candidate.encode("ascii")
         for token, tenant in self.token_tenants.items():
-            if hmac.compare_digest(candidate, token):
+            if hmac.compare_digest(candidate_bytes, token.encode("ascii")):
                 return tenant
         return None
 
@@ -198,6 +203,12 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "GuardianLocal"
     sys_version = ""
+    _request_content_length: int | None = None
+
+    def __getattr__(self, name: str):
+        if name.startswith("do_"):
+            return self._dispatch
+        raise AttributeError(name)
 
     @property
     def guardian_server(self) -> GuardianHTTPServer:
@@ -215,6 +226,21 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
         """Suppress default exception interpolation."""
 
         del format, args
+
+    def send_error(
+        self,
+        code: int,
+        message: str | None = None,
+        explain: str | None = None,
+    ) -> None:
+        """Replace BaseHTTPRequestHandler HTML errors with bounded JSON."""
+
+        del message, explain
+        try:
+            status = HTTPStatus(code)
+        except ValueError:
+            status = HTTPStatus.INTERNAL_SERVER_ERROR
+        self._error(status, status.phrase.lower())
 
     def _send_json(
         self,
@@ -239,11 +265,14 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
             for name, value in headers.items():
                 self.send_header(name, value)
         self.end_headers()
-        if self.command != "HEAD":
+        if getattr(self, "command", "") != "HEAD":
             self.wfile.write(body)
         _LOGGER.info(
             "guardian HTTP request completed",
-            extra={"http_method": self.command, "http_status": status.value},
+            extra={
+                "http_method": getattr(self, "command", "unknown"),
+                "http_status": status.value,
+            },
         )
 
     def _error(
@@ -274,6 +303,30 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
         if match := _INCIDENT_PATH.fullmatch(parsed.path):
             return ("snapshot", match.group("incident_id"))
         return None
+
+    def _validate_request_envelope(self) -> bool:
+        if self.headers.get_all("Transfer-Encoding", []):
+            self._error(HTTPStatus.BAD_REQUEST, "invalid request body")
+            return False
+        lengths = self.headers.get_all("Content-Length", [])
+        if not lengths:
+            self._request_content_length = None
+            return True
+        try:
+            length = int(lengths[0]) if len(lengths) == 1 else -1
+        except ValueError:
+            length = -1
+        if length < 0:
+            self._error(HTTPStatus.BAD_REQUEST, "invalid request body")
+            return False
+        if length > self.guardian_server.max_request_body:
+            self._error(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                "request body too large",
+            )
+            return False
+        self._request_content_length = length
+        return True
 
     def _authenticated_tenant(self) -> str | None:
         values = self.headers.get_all("Authorization", [])
@@ -312,12 +365,18 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
 
     @overload
     def _read_model(
+        self, model: type[IncidentSubmission]
+    ) -> IncidentSubmission | None: ...
+
+    @overload
+    def _read_model(
         self, model: type[ObservationUpdate]
     ) -> ObservationUpdate | None: ...
 
     def _read_model(
-        self, model: type[IncidentFacts] | type[ObservationUpdate]
-    ) -> IncidentFacts | ObservationUpdate | None:
+        self,
+        model: type[IncidentFacts] | type[IncidentSubmission] | type[ObservationUpdate],
+    ) -> IncidentFacts | IncidentSubmission | ObservationUpdate | None:
         content_types = self.headers.get_all("Content-Type", [])
         if len(content_types) != 1:
             self._error(HTTPStatus.BAD_REQUEST, "JSON content type required")
@@ -333,26 +392,8 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
         ):
             self._error(HTTPStatus.BAD_REQUEST, "JSON content type required")
             return None
-        if self.headers.get_all("Transfer-Encoding", []):
-            self._error(
-                HTTPStatus.BAD_REQUEST,
-                "invalid request body",
-                close_connection=True,
-            )
-            return None
-        lengths = self.headers.get_all("Content-Length", [])
-        try:
-            length = int(lengths[0]) if len(lengths) == 1 else -1
-        except ValueError:
-            length = -1
-        if length > self.guardian_server.max_request_body:
-            self._error(
-                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
-                "request body too large",
-                close_connection=True,
-            )
-            return None
-        if length <= 0:
+        length = getattr(self, "_request_content_length", None)
+        if length is None or length <= 0:
             self._error(HTTPStatus.BAD_REQUEST, "invalid request body")
             return None
         raw = self.rfile.read(length)
@@ -377,21 +418,23 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
         idempotency_key = self._idempotency_key()
         if idempotency_key is None:
             return
-        facts = self._read_model(IncidentFacts)
-        if facts is None:
+        submission = self._read_model(IncidentSubmission)
+        if submission is None:
             return
         if (
-            facts.tenant_id != tenant
-            or any(item.tenant_id != tenant for item in facts.signals.all_evidence())
-            or facts.scaler is not None
-            and facts.scaler.tenant_id != tenant
+            submission.tenant_id != tenant
+            or any(
+                item.tenant_id != tenant for item in submission.signals.all_evidence()
+            )
+            or submission.scaler is not None
+            and submission.scaler.tenant_id != tenant
         ):
             self._error(HTTPStatus.FORBIDDEN, "forbidden")
             return
         snapshot = self.guardian_server.guardian_service.submit_incident(
             tenant,
             idempotency_key,
-            facts,
+            submission,
             now=datetime.now(UTC),
         )
         self._send_json(HTTPStatus.OK, self._snapshot_payload(snapshot))
@@ -420,7 +463,27 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
         )
         self._send_json(HTTPStatus.OK, self._snapshot_payload(snapshot))
 
-    def _dispatch(self) -> None:
+    def _dispatch_request(self) -> None:
+        if not self._validate_request_envelope():
+            return
+        if self.command not in {"GET", "POST"}:
+            route = self._route()
+            allow = (
+                {
+                    "health": "GET",
+                    "incidents": "POST",
+                    "observations": "POST",
+                    "snapshot": "GET",
+                }[route[0]]
+                if route is not None
+                else "GET, POST"
+            )
+            self._error(
+                HTTPStatus.METHOD_NOT_ALLOWED,
+                "method not allowed",
+                headers={"Allow": allow},
+            )
+            return
         route = self._route()
         if route is None:
             self._error(HTTPStatus.NOT_FOUND, "not found")
@@ -439,21 +502,27 @@ class GuardianRequestHandler(BaseHTTPRequestHandler):
                 headers={"Allow": expected_method},
             )
             return
+        if expected_method == "GET" and (self._request_content_length or 0) > 0:
+            self._error(HTTPStatus.BAD_REQUEST, "request body not allowed")
+            return
         if route_name == "health":
             self._send_json(HTTPStatus.OK, {"status": "ok"})
             return
         tenant = self._authenticated_tenant()
         if tenant is None:
             return
+        if route_name == "incidents":
+            self._handle_create(tenant)
+        elif route_name == "observations":
+            assert incident_id is not None
+            self._handle_observation(tenant, incident_id)
+        else:
+            assert incident_id is not None
+            self._handle_snapshot(tenant, incident_id)
+
+    def _dispatch(self) -> None:
         try:
-            if route_name == "incidents":
-                self._handle_create(tenant)
-            elif route_name == "observations":
-                assert incident_id is not None
-                self._handle_observation(tenant, incident_id)
-            else:
-                assert incident_id is not None
-                self._handle_snapshot(tenant, incident_id)
+            self._dispatch_request()
         except TenantMismatchError:
             self._error(HTTPStatus.FORBIDDEN, "forbidden")
         except IncidentNotFoundError:
