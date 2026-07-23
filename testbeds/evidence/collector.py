@@ -175,11 +175,18 @@ class EvidenceCollector:
                 provenance_ref=provenance,
             )
         desired = _optional_int(spec.get("replicas"), status.get("replicas"))
-        ready = _required_int(status, "readyReplicas")
-        if desired is None or ready is None:
+        ready = _omitempty_replica_int(status, "readyReplicas")
+        if desired is None:
             return UnavailableEvidence(
                 EvidenceSourceKind.KUBERNETES_WORKLOAD,
                 reason="kubernetes workload replica fields unavailable",
+                observed_at=observed_at,
+                provenance_ref=provenance,
+            )
+        if ready is None:
+            return UnavailableEvidence(
+                EvidenceSourceKind.KUBERNETES_WORKLOAD,
+                reason="kubernetes workload readyReplicas unparsable",
                 observed_at=observed_at,
                 provenance_ref=provenance,
             )
@@ -326,10 +333,12 @@ class EvidenceCollector:
                 provenance_ref=provenance,
             )
         phase = status.get("phase")
-        ready = _required_int(status, "readyReplicas")
-        desired = _required_int(status, "replicas")
-        updated = _required_int(status, "updatedReplicas")
-        unavailable = _required_int(status, "unavailableReplicas")
+        # Replica counters are omitempty in Kubernetes/Argo JSON; absent means 0
+        # once a real status object exists. Empty/missing payloads still fail closed.
+        ready = _omitempty_replica_int(status, "readyReplicas")
+        desired = _omitempty_replica_int(status, "replicas")
+        updated = _omitempty_replica_int(status, "updatedReplicas")
+        unavailable = _omitempty_replica_int(status, "unavailableReplicas")
         if (
             not isinstance(phase, str)
             or not phase
@@ -573,14 +582,16 @@ def _validate_k8s_token(value: str, field: str) -> str | None:
     return None
 
 
-def _required_int(mapping: Mapping[str, Any], key: str) -> int | None:
-    if key not in mapping:
-        return None
-    value = mapping[key]
-    if value is None:
-        return None
+def _omitempty_replica_int(mapping: Mapping[str, Any], key: str) -> int | None:
+    """Interpret Kubernetes omitempty replica counters.
+
+    When the status/spec object exists but the key is absent (or null), the
+    observed value is zero. Explicit non-integer values remain unusable.
+    """
+    if key not in mapping or mapping[key] is None:
+        return 0
     try:
-        return int(value)
+        return int(mapping[key])
     except (TypeError, ValueError):
         return None
 

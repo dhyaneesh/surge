@@ -16,6 +16,10 @@ from testbeds.evidence.collector import HttpProbeRunner, ProbeResult
 Clock = Callable[[], datetime]
 
 
+class SignozExportError(RuntimeError):
+    """Raised when OTLP/HTTP export does not succeed with a 2xx status."""
+
+
 @dataclass(frozen=True, slots=True)
 class SignozQueryResult:
     matched: bool
@@ -104,18 +108,23 @@ class SignozEvidenceClient:
                 }
             ]
         }
-        await self._http.post_json(
+        export = await self._http.post_json(
             f"{self._otlp}/v1/metrics",
             payload,
             timeout=self._timeout,
             headers={"Content-Type": "application/json"},
         )
+        if not (200 <= int(export.status_code) < 300):
+            raise SignozExportError(
+                f"OTLP export failed with status {export.status_code}"
+            )
         return {
             "available": available,
             "latency_ms": latency_ms,
             "status_code": probe.status_code,
             "observed_at": observed_at.isoformat(),
             "attributes": attributes,
+            "export_status_code": int(export.status_code),
         }
 
     async def query_telemetry_arrival(

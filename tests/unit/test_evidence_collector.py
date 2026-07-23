@@ -523,6 +523,91 @@ def test_partial_kubernetes_payload_without_replicas_is_unavailable() -> None:
     assert isinstance(sample, UnavailableEvidence)
 
 
+def test_omitted_ready_replicas_means_zero_when_status_present() -> None:
+    payload = {
+        "metadata": {"name": "frontend"},
+        "spec": {
+            "replicas": 3,
+            "template": {
+                "spec": {
+                    "containers": [
+                        {
+                            "name": "frontend",
+                            "image": "ghcr.io/demo/frontend:1.2.3@sha256:" + ("a" * 64),
+                        }
+                    ]
+                }
+            },
+        },
+        # Kubernetes omitempty drops readyReplicas when zero after a crash.
+        "status": {"replicas": 3},
+    }
+    runner = FakeCommandRunner(
+        [CommandResult(("kubectl",), 0, json.dumps(payload), "", 0.02)]
+    )
+    collector = EvidenceCollector(
+        command_runner=runner, http_runner=FakeHttpRunner(), clock=lambda: NOW
+    )
+    sample = asyncio.run(
+        collector.sample_kubernetes_workload(
+            namespace="otel-demo",
+            workload_kind="Deployment",
+            workload_name="frontend",
+            identity=_identity(),
+        )
+    )
+    assert isinstance(sample, EvidenceSample)
+    assert sample.values["desired_replicas"] == 3
+    assert sample.values["ready_replicas"] == 0
+
+
+def test_omitted_unavailable_replicas_means_zero_on_healthy_rollout() -> None:
+    payload = {
+        "metadata": {"name": "rollouts-demo"},
+        "status": {
+            "phase": "Healthy",
+            "replicas": 2,
+            "readyReplicas": 2,
+            "updatedReplicas": 2,
+            # unavailableReplicas omitted via omitempty when zero
+        },
+    }
+    runner = FakeCommandRunner(
+        [CommandResult(("kubectl",), 0, json.dumps(payload), "", 0.02)]
+    )
+    collector = EvidenceCollector(
+        command_runner=runner, http_runner=FakeHttpRunner(), clock=lambda: NOW
+    )
+    sample = asyncio.run(
+        collector.sample_rollout(
+            namespace="argo-rollouts",
+            rollout_name="rollouts-demo",
+            identity=_identity(environment="argo-rollouts", namespace="argo-rollouts"),
+        )
+    )
+    assert isinstance(sample, EvidenceSample)
+    assert sample.values["unavailable_replicas"] == 0
+    assert sample.values["ready_replicas"] == 2
+
+
+def test_non_object_kubernetes_payload_is_unavailable() -> None:
+    runner = FakeCommandRunner(
+        [CommandResult(("kubectl",), 0, json.dumps([{"kind": "List"}]), "", 0.02)]
+    )
+    collector = EvidenceCollector(
+        command_runner=runner, http_runner=FakeHttpRunner(), clock=lambda: NOW
+    )
+    sample = asyncio.run(
+        collector.sample_kubernetes_workload(
+            namespace="otel-demo",
+            workload_kind="Deployment",
+            workload_name="frontend",
+            identity=_identity(),
+        )
+    )
+    assert isinstance(sample, UnavailableEvidence)
+
+
 def test_empty_rollout_payload_is_unavailable_not_zero_sample() -> None:
     runner = FakeCommandRunner([CommandResult(("kubectl",), 0, "{}", "", 0.02)])
     collector = EvidenceCollector(
@@ -537,6 +622,31 @@ def test_empty_rollout_payload_is_unavailable_not_zero_sample() -> None:
     )
     assert isinstance(sample, UnavailableEvidence)
     assert sample.source_kind is EvidenceSourceKind.ROLLOUT_STATE
+
+
+def test_signoz_otlp_export_fails_closed_on_non_2xx() -> None:
+    from testbeds.evidence.signoz import SignozExportError
+
+    http = FakeHttpRunner(
+        [
+            ProbeResult(status_code=200, latency_ms=5.0, body="ok"),
+            ProbeResult(status_code=503, latency_ms=2.0, body="unavailable"),
+        ]
+    )
+    client = SignozEvidenceClient(
+        otlp_endpoint="http://signoz-otel:4318",
+        query_endpoint="http://signoz:8080",
+        http_runner=http,
+        clock=lambda: NOW,
+    )
+    with pytest.raises(SignozExportError, match="503"):
+        asyncio.run(
+            client.export_blackbox_probe(
+                probe_url="http://frontend:8080/health",
+                identity=_identity(),
+            )
+        )
+    assert len(http.posts) == 1
 
 
 def test_metrics_missing_usage_fields_are_unavailable_not_zero() -> None:
