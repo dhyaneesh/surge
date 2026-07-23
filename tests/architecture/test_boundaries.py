@@ -158,6 +158,22 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             1,
         )
 
+    def test_guardian_application_imports_nats_client(self) -> None:
+        self.assert_rule(
+            {"apps/guardian_api/domain.py": "import nats\n"},
+            "ARCH-GUARDIAN-NO-EXECUTION-CLIENT",
+            "apps/guardian_api/domain.py",
+            1,
+        )
+
+    def test_guardian_application_imports_temporal_client(self) -> None:
+        self.assert_rule(
+            {"apps/guardian_api/domain.py": "from temporalio.client import Client\n"},
+            "ARCH-GUARDIAN-NO-EXECUTION-CLIENT",
+            "apps/guardian_api/domain.py",
+            1,
+        )
+
     def test_production_service_imports_signoz_mcp_client(self) -> None:
         self.assert_rule(
             {"services/reasoner/diagnostics.py": "import signoz_mcp.client\n"},

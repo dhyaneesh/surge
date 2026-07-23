@@ -149,6 +149,11 @@ class TargetIdentity(StrictModel):
 class EvidenceFact(StrictModel):
     tenant_id: NonEmptyString
     subject_role: NonEmptyString
+    environment: NonEmptyString
+    namespace: NonEmptyString
+    workload_kind: NonEmptyString
+    workload_name: NonEmptyString
+    service_name: NonEmptyString
     observed_at: AwareDatetime
     freshness: EvidenceFreshness
     source: EvidenceSource
@@ -181,11 +186,6 @@ class BooleanEvidence(EvidenceFact):
 
 
 class VersionEvidence(EvidenceFact):
-    environment: NonEmptyString
-    namespace: NonEmptyString
-    workload_kind: NonEmptyString
-    workload_name: NonEmptyString
-    service_name: NonEmptyString
     previous_service_version: NonEmptyString | None = None
     current_service_version: NonEmptyString | None = None
     previous_digest: ImageDigest
@@ -361,7 +361,7 @@ class HypothesisScore(StrictModel):
 
 class GuardianProjection(StrictModel):
     schema_version: Literal["guardian.projection/v1"] = "guardian.projection/v1"
-    rules_version: Literal["guardian-rules/v1"] = "guardian-rules/v1"
+    rules_version: NonEmptyString
     incident_class: IncidentClass | None
     telemetry_healthy: bool
     integrity_failures: tuple[CriticalIntegrityFailure, ...]

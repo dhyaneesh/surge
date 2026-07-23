@@ -35,6 +35,7 @@ from apps.guardian_api.models import (
     VersionEvidence,
     WorkflowState,
 )
+from apps.guardian_api.rules import RULE_DEFINITION
 
 
 NOW = datetime(2026, 7, 23, 8, 0, tzinfo=UTC)
@@ -56,6 +57,11 @@ def numeric(
     return NumericEvidence(
         tenant_id=tenant,
         subject_role=subject_role,
+        environment="production",
+        namespace="payments",
+        workload_kind="Deployment",
+        workload_name="processor",
+        service_name="processor",
         value=value,
         baseline_value=baseline,
         observed_at=NOW,
@@ -77,6 +83,11 @@ def boolean(
     return BooleanEvidence(
         tenant_id=tenant,
         subject_role="dependency" if group == "dependency" else "request-processor",
+        environment="production",
+        namespace="dependencies" if group == "dependency" else "payments",
+        workload_kind="Deployment",
+        workload_name="database" if group == "dependency" else "processor",
+        service_name="database" if group == "dependency" else "processor",
         value=value,
         observed_at=NOW,
         freshness=EvidenceFreshness.FRESH,
@@ -147,6 +158,12 @@ def base_facts(**changes: object) -> IncidentFacts:
 
 def score(projection: GuardianProjection, name: HypothesisName):
     return next(item for item in projection.hypotheses if item.name is name)
+
+
+def test_projection_and_hypotheses_use_the_versioned_rule_definition() -> None:
+    projection = evaluate_incident(base_facts(), now=NOW)
+    assert projection.rules_version == RULE_DEFINITION.version
+    assert set(RULE_DEFINITION.hypotheses) == set(HypothesisName)
 
 
 def test_healthy_elevated_load_has_no_action() -> None:
@@ -286,6 +303,28 @@ def test_optional_conflicting_or_future_evidence_fails_closed() -> None:
     ):
         projection = evaluate_incident(base_facts(signals=signals), now=NOW)
         assert projection.incident_class is IncidentClass.TELEMETRY_FAILURE
+
+
+@pytest.mark.parametrize(
+    "freshness", [EvidenceFreshness.STALE, EvidenceFreshness.MISSING]
+)
+def test_optional_unusable_evidence_blocks_otherwise_executable_action(
+    freshness: EvidenceFreshness,
+) -> None:
+    projection = evaluate_incident(
+        base_facts(
+            signals=SignalFacts(
+                request_rate=numeric(200, baseline=100, group="load"),
+                cpu_utilization=numeric(0.85, group="util"),
+                error_rate=numeric(0.05, baseline=0.01, group="errors").model_copy(
+                    update={"freshness": freshness}
+                ),
+            )
+        ),
+        now=NOW,
+    )
+    assert projection.incident_class is IncidentClass.TELEMETRY_FAILURE
+    assert projection.proposed_action is None
 
 
 def test_sample_counts_cannot_exceed_expected() -> None:
@@ -1226,6 +1265,33 @@ def test_target_role_mismatch_is_an_identity_conflict() -> None:
                 request_rate=rate,
                 cpu_utilization=numeric(0.85, group="util"),
             ),
+        ),
+        now=NOW,
+    )
+    assert projection.incident_class is IncidentClass.TELEMETRY_FAILURE
+    assert CriticalIntegrityFailure.IDENTITY_CONFLICT in projection.integrity_failures
+
+
+@pytest.mark.parametrize(
+    "identity_change",
+    [
+        {"environment": "staging"},
+        {"namespace": "other"},
+        {"workload_kind": "StatefulSet"},
+        {"workload_name": "other-processor"},
+        {"service_name": "other-service"},
+    ],
+)
+def test_same_role_cross_target_evidence_is_an_identity_conflict(
+    identity_change: dict[str, str],
+) -> None:
+    rate = numeric(200, baseline=100, group="load").model_copy(update=identity_change)
+    projection = evaluate_incident(
+        base_facts(
+            signals=SignalFacts(
+                request_rate=rate,
+                cpu_utilization=numeric(0.85, group="util"),
+            )
         ),
         now=NOW,
     )

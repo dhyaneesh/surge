@@ -32,6 +32,7 @@ MODEL_CLIENT_MODULES = {
     "openai",
 }
 MCP_CLIENT_MODULES = {"mcp", "signoz_mcp", "signoz-mcp"}
+EXECUTION_CLIENT_MODULES = {"nats", "temporalio"}
 MUTATION_PROVIDER_SYMBOLS = {
     "GitOpsRollbackProvider",
     "KubernetesMutationProvider",
@@ -301,6 +302,15 @@ def _check_source(
                     reference.line,
                     "Guardian application imports an action or mutation provider",
                     "Keep execution providers behind the dedicated action controller.",
+                )
+            if _module_matches(reference.module, EXECUTION_CLIENT_MODULES):
+                _add(
+                    violations,
+                    "ARCH-GUARDIAN-NO-EXECUTION-CLIENT",
+                    relative,
+                    reference.line,
+                    f"Guardian application imports execution client {reference.module!r}",
+                    "Keep NATS and Temporal execution behind dedicated service boundaries.",
                 )
         if tree is not None:
             for line in _python_write_client_lines(tree, imports):

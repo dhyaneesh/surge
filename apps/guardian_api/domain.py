@@ -20,9 +20,8 @@ from apps.guardian_api.models import (
     WorkflowState,
 )
 from apps.guardian_api.rules import (
-    ACTION_BY_HYPOTHESIS,
     ALLOWED_SOURCES_BY_SIGNAL,
-    EVIDENCE_GROUPS_BY_HYPOTHESIS,
+    RULE_DEFINITION,
     score_hypotheses,
 )
 
@@ -79,7 +78,7 @@ def _has_conflict(actions: tuple[ActionType, ...]) -> bool:
 def _discriminatory_groups(hypotheses: tuple) -> tuple[str, ...]:
     groups: list[str] = []
     for hypothesis in sorted(hypotheses, key=lambda item: item.name.value):
-        groups.extend(EVIDENCE_GROUPS_BY_HYPOTHESIS[hypothesis.name])
+        groups.extend(RULE_DEFINITION.hypotheses[hypothesis.name].discriminatory_groups)
     return tuple(dict.fromkeys(groups))
 
 
@@ -98,8 +97,13 @@ def _evidence_integrity_failures(
     for signal_name, evidence in evidence_items:
         if evidence.source not in ALLOWED_SOURCES_BY_SIGNAL[signal_name]:
             failures.append(CriticalIntegrityFailure.COMPARISON_INVALID)
-        if evidence.freshness is EvidenceFreshness.CONFLICTING:
+        if evidence.freshness in {
+            EvidenceFreshness.CONFLICTING,
+            EvidenceFreshness.MISSING,
+        }:
             failures.append(CriticalIntegrityFailure.COMPARISON_INVALID)
+        if evidence.freshness is EvidenceFreshness.STALE:
+            failures.append(CriticalIntegrityFailure.SAMPLE_STALE)
         if evidence.observed_at - now > timedelta(
             seconds=60
         ) or evidence.observed_at - facts.observed_at > timedelta(seconds=60):
@@ -133,7 +137,14 @@ def _evidence_integrity_failures(
             failures.append(CriticalIntegrityFailure.COMPARISON_INVALID)
     if facts.identity is not None and any(
         name in TARGET_CORRELATED_SIGNALS
-        and item.subject_role != facts.identity.target_role
+        and (
+            item.subject_role != facts.identity.target_role
+            or item.environment != facts.identity.environment
+            or item.namespace != facts.identity.namespace
+            or item.workload_kind != facts.identity.workload_kind
+            or item.workload_name != facts.identity.workload_name
+            or item.service_name != facts.identity.service_name
+        )
         for name, item in evidence_items
     ):
         failures.append(CriticalIntegrityFailure.IDENTITY_CONFLICT)
@@ -251,7 +262,7 @@ def evaluate_incident(
     )
     eligible = tuple(item for item in hypotheses if item.eligible)
     eligible_actions = tuple(
-        dict.fromkeys(ACTION_BY_HYPOTHESIS[item.name] for item in eligible)
+        dict.fromkeys(RULE_DEFINITION.hypotheses[item.name].action for item in eligible)
     )
     forbidden_actions: list[ActionType] = []
     permitted_actions: tuple[ActionType, ...] = ()
@@ -309,7 +320,7 @@ def evaluate_incident(
                 terminal_reason = "conflict-unresolved"
                 escalation_required = facts.severity is IncidentSeverity.CRITICAL
         else:
-            proposed_action = ACTION_BY_HYPOTHESIS[winner.name]
+            proposed_action = RULE_DEFINITION.hypotheses[winner.name].action
             policy_decision = PolicyDecision.APPROVAL_REQUIRED
     elif (
         facts.evidence_pass.completed_passes >= 2
@@ -396,6 +407,7 @@ def evaluate_incident(
             scaler_result = ScalerResult.FRESH_VALUE
 
     return GuardianProjection(
+        rules_version=RULE_DEFINITION.version,
         incident_class=incident_class,
         telemetry_healthy=telemetry_healthy,
         integrity_failures=failures,

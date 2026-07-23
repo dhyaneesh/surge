@@ -17,9 +17,6 @@ from apps.guardian_api.models import (
 )
 
 
-RULES_VERSION = "guardian-rules/v1"
-
-
 class Polarity(StrEnum):
     SUPPORT = "support"
     CONTRADICTION = "contradiction"
@@ -38,33 +35,50 @@ class Contribution:
         return self.weight * self.confidence
 
 
-HYPOTHESIS_GROUPS: dict[HypothesisName, tuple[frozenset[str], ...]] = {
-    HypothesisName.LOAD_SPIKE: (frozenset({"load"}), frozenset({"utilization"})),
-    HypothesisName.DEPLOYMENT_REGRESSION: (
-        frozenset({"deployment"}),
-        frozenset({"exceptions", "latency"}),
-    ),
-    HypothesisName.RESOURCE_SATURATION: (
-        frozenset({"utilization"}),
-        frozenset({"pressure"}),
-    ),
-    HypothesisName.DEPENDENCY_FAILURE: (
-        frozenset({"topology"}),
-        frozenset({"dependency"}),
-    ),
-}
-ACTION_BY_HYPOTHESIS = {
-    HypothesisName.LOAD_SPIKE: ActionType.SCALE_UP,
-    HypothesisName.DEPLOYMENT_REGRESSION: ActionType.ROLLBACK,
-    HypothesisName.RESOURCE_SATURATION: ActionType.SCALE_UP,
-    HypothesisName.DEPENDENCY_FAILURE: ActionType.PROTECT_DEPENDENCY,
-}
-EVIDENCE_GROUPS_BY_HYPOTHESIS = {
-    HypothesisName.LOAD_SPIKE: ("load", "utilization"),
-    HypothesisName.DEPLOYMENT_REGRESSION: ("deployment", "exceptions|latency"),
-    HypothesisName.RESOURCE_SATURATION: ("pressure", "utilization"),
-    HypothesisName.DEPENDENCY_FAILURE: ("dependency", "topology"),
-}
+@dataclass(frozen=True)
+class HypothesisRule:
+    required_groups: tuple[frozenset[str], ...]
+    action: ActionType
+    discriminatory_groups: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RuleDefinition:
+    version: str
+    hypotheses: dict[HypothesisName, HypothesisRule]
+
+
+RULE_DEFINITION = RuleDefinition(
+    version="guardian-rules/v1",
+    hypotheses={
+        HypothesisName.LOAD_SPIKE: HypothesisRule(
+            required_groups=(frozenset({"load"}), frozenset({"utilization"})),
+            action=ActionType.SCALE_UP,
+            discriminatory_groups=("load", "utilization"),
+        ),
+        HypothesisName.DEPLOYMENT_REGRESSION: HypothesisRule(
+            required_groups=(
+                frozenset({"deployment"}),
+                frozenset({"exceptions", "latency"}),
+            ),
+            action=ActionType.ROLLBACK,
+            discriminatory_groups=("deployment", "exceptions|latency"),
+        ),
+        HypothesisName.RESOURCE_SATURATION: HypothesisRule(
+            required_groups=(
+                frozenset({"utilization"}),
+                frozenset({"pressure"}),
+            ),
+            action=ActionType.SCALE_UP,
+            discriminatory_groups=("pressure", "utilization"),
+        ),
+        HypothesisName.DEPENDENCY_FAILURE: HypothesisRule(
+            required_groups=(frozenset({"topology"}), frozenset({"dependency"})),
+            action=ActionType.PROTECT_DEPENDENCY,
+            discriminatory_groups=("dependency", "topology"),
+        ),
+    },
+)
 
 INDEPENDENT_TELEMETRY_SOURCES = frozenset(
     {EvidenceSource.QUERY_CONTRACT, EvidenceSource.ADAPTER_OBSERVATION}
@@ -300,7 +314,8 @@ def score_hypotheses(
         signals, now=now, freshness_seconds=freshness_seconds
     )
     results: list[HypothesisScore] = []
-    for name, required_sets in HYPOTHESIS_GROUPS.items():
+    for name, definition in RULE_DEFINITION.hypotheses.items():
+        required_sets = definition.required_groups
         relevant_groups = frozenset().union(*required_sets)
         relevant = list(
             _deduplicate_contributions(
